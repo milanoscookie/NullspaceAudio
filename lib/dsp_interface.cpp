@@ -20,7 +20,7 @@ DSPInterface::DSPInterface(Params &params, int systemLatencyBlocks)
     controlBuf[i] = Block::Zero();
   }
   controlBufIndex_ = 0;
-  
+
   inputBuf.publish(MicBlock{Block::Zero(), Block::Zero()});
 
   // Create audio source
@@ -48,7 +48,8 @@ DSPInterface::~DSPInterface() {
 }
 
 void DSPInterface::audioCallback_(const Block &input, Block &output) {
-  // read command signal U from the ring buffer (delayed by systemLatencyBlocks_)
+  // read command signal U from the ring buffer (delayed by
+  // systemLatencyBlocks_)
   Block u = Block::Zero();
   {
     std::lock_guard<std::mutex> lk(controlBuf_mutex_);
@@ -167,7 +168,7 @@ void DSPInterface::updateDynamicsS_() {
     Block w_lp_block = state.S_dynamics_ng.filterBlock(w_block);
     w_lp.segment<dsp::BLOCK_SIZE>(i * dsp::BLOCK_SIZE) = w_lp_block;
   }
-  
+
   IRBlock S_new = S_true + dyn.noise_gain * w_lp;
 
   // renormalize

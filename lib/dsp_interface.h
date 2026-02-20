@@ -1,33 +1,27 @@
 #pragma once
 
-// #include "ColoredNoiseGen.h"
+#include "utils/DoubleBufferSPSC.h"
+#include "utils/FastLinearSystem.h"
+#include "utils/IIRFilter.h"
+#include "utils/LPButterworthCoeff.h"
+#include "utils/RingBuffer.h"
+
 #include "audio_source.h"
 #include "dsp_config.h"
-#include "utils/IIRFilter.h"
-#include "utils/RingBuffer.h"
-#include <utils/DoubleBufferSPSC.h>
-#include <utils/FastLinearSystem.h>
-#include "utils/LPButterworthCoeff.h"
 
-    // Run the app-provided ANC algorithm
-
-#include <cmath>
-#include <future>
-#include <iostream>
-#include <utility>
-#include <thread>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <ctime>
 #include <functional>
+#include <future>
+#include <iostream>
 #include <mutex>
 #include <optional>
 #include <random>
 #include <thread>
-#include <atomic>
 
 #include <Eigen/Dense>
-// #include <unsupported/Eigen/FFT>
 
 using Block = Eigen::Matrix<float, dsp::BLOCK_SIZE, 1>;
 using IRBlock = Eigen::Matrix<float, dsp::IR_SIZE, 1>;
@@ -87,9 +81,8 @@ struct State {
 
   ContextBuffer S_context;
 
-    IIRFilter S_dynamics_ng = IIRFilter(IIRFilter::identityCoeffs());
-  IIRFilter mic_noise_color =
-      IIRFilter(IIRFilter::identityCoeffs());
+  IIRFilter S_dynamics_ng = IIRFilter(IIRFilter::identityCoeffs());
+  IIRFilter mic_noise_color = IIRFilter(IIRFilter::identityCoeffs());
 };
 
 struct Params {
@@ -126,8 +119,8 @@ public:
   const Paths &getPaths() const { return params_.paths; }
 
   // Check if audio source is still running
-  bool isAudioSourceRunning() const { 
-    return audioSource_ && audioSource_->isRunning(); 
+  bool isAudioSourceRunning() const {
+    return audioSource_ && audioSource_->isRunning();
   }
 
   using ProcessMicsFn = std::function<void(const MicBlock &, Block &)>;
@@ -160,9 +153,11 @@ private:
   std::unique_ptr<AudioSource> audioSource_;
   void audioCallback_(const Block &input, Block &output);
 
-  void step_();               // advance simulation by 1 block
-  void updateDynamicsS_();    // update secondary path dynamics (slowly drifting S_true + noise)
-  void updateNoiseProfile_(); // update noise model (noise stddev & varying color)
+  void step_();            // advance simulation by 1 block
+  void updateDynamicsS_(); // update secondary path dynamics (slowly drifting
+                           // S_true + noise)
+  void
+  updateNoiseProfile_(); // update noise model (noise stddev & varying color)
 
   // Full plant: outside = H*n + C*speaker(u), inear = P*n + S*speaker(u)
   void propagatePlant_(const Block &u, const Block &n, MicBlock &mb);
@@ -181,7 +176,7 @@ private:
   void dspThreadLoop_(std::stop_token st);
   Block callProcessMicsWithTimeout_(const MicBlock &mb, int timeoutUs);
 
-  // preallocate scratch buffers for plant propagation 
+  // preallocate scratch buffers for plant propagation
   Block u_spk_ = Block::Zero();
   Block yC_ = Block::Zero(); // speaker -> outside mic
   Block yS_ = Block::Zero(); // speaker -> in-ear mic

@@ -32,7 +32,8 @@ void WavFileSource::open(AudioCallback callback) {
   std::cout << "  Channels: " << numChannels_ << std::endl;
   std::cout << "  Bits per sample: " << bitsPerSample_ << std::endl;
   std::cout << "  Total samples: " << totalSamples_ << std::endl;
-  std::cout << "  Buffer size: " << (audioBuffer_.size() * sizeof(float) / 1024.0f / 1024.0f)
+  std::cout << "  Buffer size: "
+            << (audioBuffer_.size() * sizeof(float) / 1024.0f / 1024.0f)
             << " MB" << std::endl;
   std::cout << "  Duration: "
             << (totalSamples_ / static_cast<float>(sampleRate_)) << " seconds"
