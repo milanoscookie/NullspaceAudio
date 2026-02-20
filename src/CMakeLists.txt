@@ -1,10 +1,11 @@
 # Main executable
-add_executable(DSPApp main.cpp)
+add_executable(DSPApp main.cpp anc.cpp)
 
-# Find ALSA for suppressing error messages
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(ALSA REQUIRED alsa)
 
-# Link against the DSP interface library and ALSA
-target_link_libraries(DSPApp PRIVATE DSPInterface ${ALSA_LIBRARIES})
-target_include_directories(DSPApp PRIVATE ${ALSA_INCLUDE_DIRS})
+# Link against the DSP interface library only
+target_link_libraries(DSPApp PRIVATE DSPInterface)
+
+# Ensure anc.h is found
+target_include_directories(DSPApp PRIVATE ../src)
+
+target_sources(DSPApp PRIVATE anc.h)

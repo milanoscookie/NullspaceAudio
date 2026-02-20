@@ -192,10 +192,4 @@ private:
   Block lastInear_ = Block::Zero();
 
   std::mt19937 noiseRng_{std::random_device{}()};
-
-  // We have a thread reading in 4ms of audio blocks and storing it in a size
-  // LATENCY context buffer The main thread reads the first 4ms block in this
-  // buffer, applies a control signal to it, propigates and returns the output,
-  // which then writes to file. Then it then pops the block from the buffer.
-  // This keeps happening in real time
 };

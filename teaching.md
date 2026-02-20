@@ -16,6 +16,7 @@
 - Dealing with State
 - Basic Filtering Implenmentation in C++
 - Writing Values to a file (Help with Debugging)
+- Profiling (use crossplatform https://tracy.nereid.pl/, but I have been using perf on linux)
 
 
 ## Audio Teaching

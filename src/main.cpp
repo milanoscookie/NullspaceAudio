@@ -1,26 +1,40 @@
 #include "dsp_interface.h"
 #include "wav_writer.h"
+#include "anc.h"
 #include <iostream>
 #include <chrono>
 #include <string>
 #include <print>
 int main(int argc, char *argv[]) {
     try {
+        // Help message
+        if (argc > 1 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
+            std::cout << "Usage: " << argv[0] << " [input.wav] [output_prefix]" << std::endl;
+            std::cout << "  input.wav      : Input WAV file (default: input.wav)" << std::endl;
+            std::cout << "  output_prefix  : Prefix for output files (default: output)" << std::endl;
+            std::cout << "Output files: <prefix>_outside_mic.wav, <prefix>_inear_mic.wav" << std::endl;
+            return 0;
+        }
+
         // Parse command-line arguments
         std::string inputWavFile = "input.wav";  // Default input file
-        
+        std::string outputPrefix = "output";     // Default output prefix
+
         if (argc > 1) {
             inputWavFile = argv[1];
         }
-        
+        if (argc > 2) {
+            outputPrefix = argv[2];
+        }
+
         std::cout << "Using input WAV file: " << inputWavFile << std::endl;
-        
+        std::cout << "Output file prefix: " << outputPrefix << std::endl;
+
         // Initialize DSP parameters
         Params params;
-        
+
         // Set input WAV file path
         params.audioConfig.inputWavPath = inputWavFile;
-        
         // Set reasonable impulse response parameters
         // H: noise -> outside mic (realistic microphone coupling)
         {
@@ -78,13 +92,16 @@ int main(int argc, char *argv[]) {
         params.noise.inear_mic_stddev = 0.5f;   // Even less in-ear noise
         params.dynamics.noise_gain = 0.001f;
         
-        // Create DSP interface with 1 block of system latency
-        DSPInterface dspInterface(params, 10);
+        // Create DSP interface with n block of system latency
+        DSPInterface dspInterface(params, anc::systemLatencyBlocks);
         
+
         // Create WAV writers for outside and in-ear microphones
-        WavWriter wavWriterOutside("outside_mic.wav");
-        WavWriter wavWriterInear("inear_mic.wav");
-        
+        std::string outsideFile = outputPrefix + "_outside_mic.wav";
+        std::string inearFile = outputPrefix + "_inear_mic.wav";
+        WavWriter wavWriterOutside(outsideFile);
+        WavWriter wavWriterInear(inearFile);
+
         // Open WAV files
         if (!wavWriterOutside.open() || !wavWriterInear.open()) {
             std::cerr << "Failed to open WAV files for writing" << std::endl;
@@ -94,7 +111,7 @@ int main(int argc, char *argv[]) {
         // Set up the microphone processing function
         dspInterface.setProcessMics([&](const MicBlock &micBlock, Block &control) {
             // Fill control with zeros (no active control signal)
-            control = Block::Zero();
+            anc::step(micBlock, control);
             
             // Write both outside and in-ear microphone samples to respective WAV files
             wavWriterOutside.writeBlock(micBlock.outside);
