@@ -7,14 +7,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(eigen)
 
-# Find PortAudio
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
-
 # DSP Interface Library - builds independently
 add_library(DSPInterface STATIC
   dsp_interface.cpp
-  portaudio_stream.cpp
   audio_source.cpp
   wav_file_source.cpp
   wav_writer.cpp
@@ -24,13 +19,11 @@ add_library(DSPInterface STATIC
 target_include_directories(DSPInterface
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${PORTAUDIO_INCLUDE_DIRS}
 )
 
-# Link Eigen and PortAudio
+# Link Eigen
 target_link_libraries(DSPInterface
   PUBLIC Eigen3::Eigen
-  PUBLIC ${PORTAUDIO_LIBRARIES}
 )
 
 set_target_properties(DSPInterface PROPERTIES

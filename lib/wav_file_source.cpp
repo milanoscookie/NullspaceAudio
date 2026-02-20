@@ -11,15 +11,9 @@ WavFileSource::~WavFileSource() { close(); }
 void WavFileSource::open(AudioCallback callback) {
   callback_ = std::move(callback);
 
-  // Open input WAV file
-  inputFile_.open(config_.inputPath, std::ios::binary);
-  if (!inputFile_.is_open()) {
-    throw std::runtime_error("Failed to open input WAV file: " +
-                             config_.inputPath);
-  }
-
-  if (!readWavHeader()) {
-    throw std::runtime_error("Invalid WAV file format: " + config_.inputPath);
+  // Read and buffer entire WAV file
+  if (!readWavFile()) {
+    throw std::runtime_error("Failed to read WAV file: " + config_.inputPath);
   }
 
   // Open output WAV file if specified
@@ -32,11 +26,14 @@ void WavFileSource::open(AudioCallback callback) {
     writeWavHeader(); // Write placeholder header
   }
 
-  std::cout << "WAV file opened: " << config_.inputPath << std::endl;
+  std::cout << "WAV file loaded into memory: " << config_.inputPath
+            << std::endl;
   std::cout << "  Sample rate: " << sampleRate_ << " Hz" << std::endl;
   std::cout << "  Channels: " << numChannels_ << std::endl;
   std::cout << "  Bits per sample: " << bitsPerSample_ << std::endl;
   std::cout << "  Total samples: " << totalSamples_ << std::endl;
+  std::cout << "  Buffer size: " << (audioBuffer_.size() * sizeof(float) / 1024.0f / 1024.0f)
+            << " MB" << std::endl;
   std::cout << "  Duration: "
             << (totalSamples_ / static_cast<float>(sampleRate_)) << " seconds"
             << std::endl;
@@ -47,6 +44,7 @@ void WavFileSource::start() {
     return;
 
   running_.store(true);
+  currentSample_ = 0;
   processThread_ = std::thread(&WavFileSource::processThread, this);
 }
 
@@ -65,9 +63,9 @@ void WavFileSource::close() {
     outputFile_.close();
   }
 
-  if (inputFile_.is_open()) {
-    inputFile_.close();
-  }
+  // Clear the pre-buffered audio
+  audioBuffer_.clear();
+  audioBuffer_.shrink_to_fit();
 }
 
 void WavFileSource::processThread() {
@@ -80,13 +78,11 @@ void WavFileSource::processThread() {
   while (running_.load()) {
     auto startTime = std::chrono::steady_clock::now();
 
-    // Read a block from WAV file
+    // Read a block from pre-buffered audio
     if (!readBlock(inputBlock)) {
       if (config_.loop) {
-        // Seek back to start of audio data
-        inputFile_.clear();
-        inputFile_.seekg(dataStart_);
-        samplesRead_ = 0;
+        // Loop back to start
+        currentSample_ = 0;
         if (!readBlock(inputBlock)) {
           running_.store(false);
           break;
@@ -110,27 +106,42 @@ void WavFileSource::processThread() {
     }
 
     // Simulate real-time by sleeping
-    auto elapsed = std::chrono::steady_clock::now() - startTime;
-    auto sleepTime = blockDuration - elapsed;
-    if (sleepTime > std::chrono::microseconds(0)) {
-      std::this_thread::sleep_for(sleepTime);
-    }
+    // auto elapsed = std::chrono::steady_clock::now() - startTime;
+    // auto sleepTime = blockDuration - elapsed;
+    // if (sleepTime > std::chrono::microseconds(0)) {
+    //   std::this_thread::sleep_for(sleepTime);
+    // }
   }
 }
 
-bool WavFileSource::readWavHeader() {
-  char buffer[44];
-  inputFile_.read(buffer, 44);
-  if (inputFile_.gcount() < 44)
+bool WavFileSource::readWavFile() {
+  std::ifstream file(config_.inputPath, std::ios::binary);
+  if (!file.is_open()) {
+    std::cerr << "Failed to open WAV file: " << config_.inputPath << std::endl;
     return false;
+  }
+
+  // Read and parse WAV header
+  char buffer[44];
+  file.read(buffer, 44);
+  if (file.gcount() < 44) {
+    std::cerr << "WAV file too small" << std::endl;
+    return false;
+  }
 
   // Check RIFF header
-  if (std::strncmp(buffer, "RIFF", 4) != 0)
+  if (std::strncmp(buffer, "RIFF", 4) != 0) {
+    std::cerr << "Invalid RIFF header" << std::endl;
     return false;
-  if (std::strncmp(buffer + 8, "WAVE", 4) != 0)
+  }
+  if (std::strncmp(buffer + 8, "WAVE", 4) != 0) {
+    std::cerr << "Invalid WAVE header" << std::endl;
     return false;
-  if (std::strncmp(buffer + 12, "fmt ", 4) != 0)
+  }
+  if (std::strncmp(buffer + 12, "fmt ", 4) != 0) {
+    std::cerr << "Invalid fmt chunk" << std::endl;
     return false;
+  }
 
   // Parse format chunk
   uint16_t audioFormat = *reinterpret_cast<uint16_t *>(buffer + 20);
@@ -143,68 +154,96 @@ bool WavFileSource::readWavHeader() {
   sampleRate_ = *reinterpret_cast<uint32_t *>(buffer + 24);
   bitsPerSample_ = *reinterpret_cast<uint16_t *>(buffer + 34);
 
-  // Find data chunk (might not be at offset 36)
-  inputFile_.seekg(12); // After "RIFF" size "WAVE"
+  // Find data chunk
+  file.seekg(12);
 
-  while (inputFile_.good()) {
+  size_t dataSize = 0;
+  while (file.good()) {
     char chunkId[4];
     uint32_t chunkSize;
 
-    inputFile_.read(chunkId, 4);
-    inputFile_.read(reinterpret_cast<char *>(&chunkSize), 4);
+    file.read(chunkId, 4);
+    file.read(reinterpret_cast<char *>(&chunkSize), 4);
 
     if (std::strncmp(chunkId, "data", 4) == 0) {
-      dataSize_ = chunkSize;
-      dataStart_ = inputFile_.tellg();
-      totalSamples_ = dataSize_ / (numChannels_ * bitsPerSample_ / 8);
-      return true;
+      dataSize = chunkSize;
+      break;
     }
 
     // Skip this chunk
-    inputFile_.seekg(chunkSize, std::ios::cur);
+    file.seekg(chunkSize, std::ios::cur);
   }
 
-  return false;
+  if (dataSize == 0) {
+    std::cerr << "No data chunk found" << std::endl;
+    return false;
+  }
+
+  // Calculate total samples
+  int bytesPerSample = bitsPerSample_ / 8;
+  totalSamples_ = dataSize / (numChannels_ * bytesPerSample);
+
+  // Read entire audio data into buffer
+  std::vector<char> rawData(dataSize);
+  file.read(rawData.data(), dataSize);
+  if (file.gcount() != static_cast<std::streamsize>(dataSize)) {
+    std::cerr << "Failed to read complete audio data" << std::endl;
+    return false;
+  }
+
+  // Convert to float and store in audioBuffer_
+  audioBuffer_.reserve(totalSamples_);
+
+  for (size_t i = 0; i < totalSamples_; ++i) {
+    float sample = 0.0f;
+
+    if (bitsPerSample_ == 16) {
+      int16_t rawSample = *reinterpret_cast<int16_t *>(
+          rawData.data() + i * numChannels_ * bytesPerSample);
+      sample = rawSample / 32768.0f;
+    } else if (bitsPerSample_ == 32) {
+      if (audioFormat == 3) {
+        // IEEE float
+        sample = *reinterpret_cast<float *>(rawData.data() +
+                                            i * numChannels_ * bytesPerSample);
+      } else {
+        // 32-bit PCM
+        int32_t rawSample = *reinterpret_cast<int32_t *>(
+            rawData.data() + i * numChannels_ * bytesPerSample);
+        sample = rawSample / 2147483648.0f;
+      }
+    } else if (bitsPerSample_ == 24) {
+      const char *ptr = rawData.data() + i * numChannels_ * bytesPerSample;
+      int32_t rawSample = (static_cast<int8_t>(ptr[2]) << 16) |
+                          (static_cast<uint8_t>(ptr[1]) << 8) |
+                          static_cast<uint8_t>(ptr[0]);
+      sample = rawSample / 8388608.0f;
+    } else if (bitsPerSample_ == 8) {
+      uint8_t rawSample = *reinterpret_cast<uint8_t *>(
+          rawData.data() + i * numChannels_ * bytesPerSample);
+      sample = (rawSample - 128) / 128.0f;
+    }
+
+    audioBuffer_.push_back(sample);
+  }
+
+  return true;
 }
 
 bool WavFileSource::readBlock(Block &block) {
   block.setZero();
 
-  const int bytesPerSample = bitsPerSample_ / 8;
-  std::vector<char> buffer(dsp::BLOCK_SIZE * numChannels_ * bytesPerSample);
-
-  inputFile_.read(buffer.data(), buffer.size());
-  size_t bytesRead = inputFile_.gcount();
-
-  if (bytesRead == 0)
+  if (audioBuffer_.empty() || currentSample_ >= audioBuffer_.size())
     return false;
 
-  size_t samplesInBuffer = bytesRead / (numChannels_ * bytesPerSample);
-
-  for (size_t i = 0; i < samplesInBuffer && i < dsp::BLOCK_SIZE; ++i) {
-    float sample = 0.0f;
-
-    if (bitsPerSample_ == 16) {
-      int16_t rawSample = *reinterpret_cast<int16_t *>(
-          buffer.data() + i * numChannels_ * bytesPerSample);
-      sample = rawSample / 32768.0f;
-    } else if (bitsPerSample_ == 32) {
-      // Assume float
-      sample = *reinterpret_cast<float *>(buffer.data() +
-                                          i * numChannels_ * bytesPerSample);
-    } else if (bitsPerSample_ == 24) {
-      // 24-bit audio
-      const char *ptr = buffer.data() + i * numChannels_ * bytesPerSample;
-      int32_t rawSample = (static_cast<int8_t>(ptr[2]) << 16) |
-                          (static_cast<uint8_t>(ptr[1]) << 8) |
-                          static_cast<uint8_t>(ptr[0]);
-      sample = rawSample / 8388608.0f;
+  for (int i = 0; i < dsp::BLOCK_SIZE; ++i) {
+    if (currentSample_ < audioBuffer_.size()) {
+      block(i) = audioBuffer_[currentSample_++];
+    } else {
+      block(i) = 0.0f;
     }
-
-    block(i) = sample;
   }
 
-  samplesRead_ += samplesInBuffer;
   return true;
 }
 

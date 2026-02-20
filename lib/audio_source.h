@@ -9,7 +9,7 @@
 using Block = Eigen::Matrix<float, dsp::BLOCK_SIZE, 1>;
 
 /**
- * @brief Abstract interface for audio sources (PortAudio, WAV file, etc.)
+ * @brief Abstract interface for audio sources (WAV file, etc.)
  */
 class AudioSource {
 public:
@@ -54,16 +54,10 @@ public:
  */
 class AudioSourceFactory {
 public:
-  enum class Type { PortAudio, WavFile };
+  enum class Type { WavFile };
 
   struct Config {
-    Type type = Type::PortAudio;
-
-    // PortAudio options
-    int inputDevice = -1;
-    int outputDevice = -1;
-    int inputChannels = 1;
-    int outputChannels = 1;
+    Type type = Type::WavFile;
 
     // WAV file options
     std::string inputWavPath;

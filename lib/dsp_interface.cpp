@@ -14,8 +14,13 @@ DSPInterface::DSPInterface(Params &params, int systemLatencyBlocks)
   params_.noise.noise_color_filter.setCoefficients(
       noiseFcLpf.getCoefficients());
 
-  // Seed control with zeros (no speaker output initially)
-  controlBuf.publish(Block::Zero());
+  // Initialize control ring buffer with systemLatencyBlocks_ elements
+  controlBuf.resize(systemLatencyBlocks_);
+  for (int i = 0; i < systemLatencyBlocks_; ++i) {
+    controlBuf[i] = Block::Zero();
+  }
+  controlBufIndex_ = 0;
+  
   inputBuf.publish(MicBlock{Block::Zero(), Block::Zero()});
 
   // Create audio source
@@ -43,9 +48,12 @@ DSPInterface::~DSPInterface() {
 }
 
 void DSPInterface::audioCallback_(const Block &input, Block &output) {
-  // read command signal U from the previous DSP cycle
+  // read command signal U from the ring buffer (delayed by systemLatencyBlocks_)
   Block u = Block::Zero();
-  controlBuf.readLatest(u);
+  {
+    std::lock_guard<std::mutex> lk(controlBuf_mutex_);
+    u = controlBuf[controlBufIndex_];
+  }
 
   // simulate ambientNoise
   const Block ambientNoise = input + generateMicNoiseBlock_();
@@ -104,20 +112,14 @@ void DSPInterface::dspThreadLoop_(std::stop_token st) {
       micQueue_.pop_front();
     }
 
-    // Simulate real ANC hardware processing latency
-    float systemLatencyMs =
-        dsp::BLOCK_LATENCY_MS * static_cast<float>(systemLatencyBlocks_);
-    const auto deadline = mb.timestamp + std::chrono::milliseconds(
-                                             static_cast<int>(systemLatencyMs));
-    if (Clock::now() < deadline) {
-      std::this_thread::sleep_until(deadline);
+    control = callProcessMicsWithTimeout_(mb, dsp::BLOCK_LATENCY_US);
+
+    // Publish speaker command to ring buffer
+    {
+      std::lock_guard<std::mutex> lk(controlBuf_mutex_);
+      controlBuf[controlBufIndex_] = control;
+      controlBufIndex_ = (controlBufIndex_ + 1) % systemLatencyBlocks_;
     }
-
-    // Run the app-provided ANC algorithm with timeout
-    control = callProcessMicsWithTimeout_(mb, systemLatencyMs);
-
-    // Publish speaker command; next audioCallback will read it
-    controlBuf.publish(control);
   }
 }
 
@@ -134,7 +136,9 @@ std::optional<MicBlock> DSPInterface::getMics() {
   return std::nullopt;
 }
 void DSPInterface::sendControl(const Block &control) {
-  controlBuf.publish(control);
+  std::lock_guard<std::mutex> lk(controlBuf_mutex_);
+  controlBuf[controlBufIndex_] = control;
+  controlBufIndex_ = (controlBufIndex_ + 1) % systemLatencyBlocks_;
 }
 void DSPInterface::step_() {}
 void DSPInterface::updateNoiseProfile_() {
@@ -155,10 +159,15 @@ void DSPInterface::updateDynamicsS_() {
     initialized = true;
   }
 
-  // white noise in [-1, 1]
-  IRBlock w = IRBlock::Random();
-
-  IRBlock w_lp = state.S_dynamics_ng.filterBlock(w);
+  // Generate filtered white noise for the entire IR
+  IRBlock w_lp;
+  constexpr int num_blocks = dsp::IR_SIZE / dsp::BLOCK_SIZE;
+  for (int i = 0; i < num_blocks; ++i) {
+    Block w_block = Block::Random();
+    Block w_lp_block = state.S_dynamics_ng.filterBlock(w_block);
+    w_lp.segment<dsp::BLOCK_SIZE>(i * dsp::BLOCK_SIZE) = w_lp_block;
+  }
+  
   IRBlock S_new = S_true + dyn.noise_gain * w_lp;
 
   // renormalize
@@ -245,7 +254,7 @@ float DSPInterface::computeStddev_(const Block &b) const {
 }
 
 Block DSPInterface::callProcessMicsWithTimeout_(const MicBlock &mb,
-                                                float timeoutMs) {
+                                                int timeoutUs) {
   Block result = Block::Zero();
 
   ProcessMicsFn fn;
@@ -259,9 +268,9 @@ Block DSPInterface::callProcessMicsWithTimeout_(const MicBlock &mb,
 
   auto task = std::async(std::launch::async, [&]() { fn(mb, result); });
 
-  auto deadline = std::chrono::milliseconds(static_cast<int>(timeoutMs));
+  auto deadline = std::chrono::microseconds(timeoutUs);
   if (task.wait_for(deadline) == std::future_status::timeout) {
-    std::cerr << "ProcessMics timeout after " << timeoutMs << " ms\n";
+    std::cerr << "ProcessMics timeout after " << timeoutUs << " us\n";
     result = Block::Zero();
   }
 

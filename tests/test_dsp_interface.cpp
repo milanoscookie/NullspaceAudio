@@ -16,10 +16,10 @@ static Params makeTestParams() {
   p.state.S(0) = 0.8f;       // speaker -> in-ear
   p.state.S_true = p.state.S;
 
-  // Use PortAudio (will use default device)
-  p.audioConfig.type = AudioSourceFactory::Type::PortAudio;
-  p.audioConfig.inputChannels = 1;
-  p.audioConfig.outputChannels = 1;
+  // Use WAV file (will need to provide paths)
+  p.audioConfig.type = AudioSourceFactory::Type::WavFile;
+  p.audioConfig.inputWavPath = "";
+  p.audioConfig.outputWavPath = "";
 
   // Very low noise so we can reason about signals
   p.noise.sample_sigma = 0.001f;
@@ -109,7 +109,7 @@ TEST(zero_control_inear_matches_noise_path) {
   auto mic = dsp.getMics();
   ASSERT_TRUE(mic.has_value());
   // With no noise and no real mic input, signals should be near zero
-  // (PortAudio input is likely near-zero in test environment)
+  // (WAV file input will depend on the source file)
   // Just verify it's finite
   ASSERT_TRUE(std::isfinite(mic->outside.sum()));
   ASSERT_TRUE(std::isfinite(mic->inear.sum()));

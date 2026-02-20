@@ -6,7 +6,7 @@
 #include "utils/IIRFilter.h"
 #include "utils/RingBuffer.h"
 #include <utils/DoubleBufferSPSC.h>
-#include <utils/LinearSystem.h>
+#include <utils/FastLinearSystem.h>
 #include "utils/LPButterworthCoeff.h"
 
     // Run the app-provided ANC algorithm
@@ -98,7 +98,7 @@ struct Params {
   NoiseModel noise;
   Paths paths;
   State state;
-  AudioSourceFactory::Config audioConfig; // PortAudio or WAV file
+  AudioSourceFactory::Config audioConfig; // WAV file
 };
 
 class DSPInterface {
@@ -125,14 +125,21 @@ public:
   const NoiseModel &getNoiseModel() const { return params_.noise; }
   const Paths &getPaths() const { return params_.paths; }
 
+  // Check if audio source is still running
+  bool isAudioSourceRunning() const { 
+    return audioSource_ && audioSource_->isRunning(); 
+  }
+
   using ProcessMicsFn = std::function<void(const MicBlock &, Block &)>;
   void setProcessMics(ProcessMicsFn fn);
 
 private:
   int systemLatencyBlocks_ = 1;
 
-  // Last speaker output fed back into plant on next callback
-  DoubleBufferSPSC<Block> controlBuf;
+  // Ring buffer of control blocks for system latency compensation
+  std::vector<Block> controlBuf;
+  int controlBufIndex_ = 0;
+  std::mutex controlBuf_mutex_;
 
   // Latest mic block for app observation (getMics)
   DoubleBufferSPSC<MicBlock> inputBuf;
@@ -149,7 +156,7 @@ private:
 
   std::jthread dspThread_;
 
-  // Audio source (PortAudio or WAV file)
+  // Audio source (WAV file)
   std::unique_ptr<AudioSource> audioSource_;
   void audioCallback_(const Block &input, Block &output);
 
@@ -165,14 +172,14 @@ private:
 
   Params params_;
 
-  LinearSystem<dsp::IR_SIZE> H_system_;
-  LinearSystem<dsp::IR_SIZE> S_system_;
-  LinearSystem<dsp::IR_SIZE> C_system_;
-  LinearSystem<dsp::IR_SIZE> P_system_;
-  LinearSystem<dsp::IR_SIZE> speakerSystem_;
+  FastLinearSystem<dsp::IR_SIZE> H_system_;
+  FastLinearSystem<dsp::IR_SIZE> S_system_;
+  FastLinearSystem<dsp::IR_SIZE> C_system_;
+  FastLinearSystem<dsp::IR_SIZE> P_system_;
+  FastLinearSystem<dsp::IR_SIZE> speakerSystem_;
 
   void dspThreadLoop_(std::stop_token st);
-  Block callProcessMicsWithTimeout_(const MicBlock &mb, float timeoutMs);
+  Block callProcessMicsWithTimeout_(const MicBlock &mb, int timeoutUs);
 
   // preallocate scratch buffers for plant propagation 
   Block u_spk_ = Block::Zero();

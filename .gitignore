@@ -1,5 +1,6 @@
 build 
 .cache
+perf.data*
 # Prerequisites
 *.d
 

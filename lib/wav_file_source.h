@@ -3,10 +3,12 @@
 #include "audio_source.h"
 #include <atomic>
 #include <fstream>
+#include <memory>
 #include <thread>
+#include <vector>
 
 /**
- * @brief WAV file audio source - reads from WAV file, optionally writes output
+ * @brief WAV file audio source - pre-buffers entire file in heap memory
  */
 class WavFileSource : public AudioSource {
 public:
@@ -28,7 +30,7 @@ public:
 
 private:
   void processThread();
-  bool readWavHeader();
+  bool readWavFile();
   bool readBlock(Block &block);
   void writeWavHeader();
   void writeBlock(const Block &block);
@@ -37,7 +39,6 @@ private:
   Config config_;
   AudioCallback callback_;
 
-  std::ifstream inputFile_;
   std::ofstream outputFile_;
 
   std::atomic<bool> running_{false};
@@ -47,10 +48,11 @@ private:
   int sampleRate_ = dsp::SAMPLE_RATE;
   int numChannels_ = 1;
   int bitsPerSample_ = 16;
-  size_t dataSize_ = 0;
-  size_t dataStart_ = 0;
-  size_t samplesRead_ = 0;
   size_t totalSamples_ = 0;
+
+  // Pre-buffered audio data (float samples)
+  std::vector<float> audioBuffer_;
+  size_t currentSample_ = 0;
 
   // Output tracking
   size_t samplesWritten_ = 0;
