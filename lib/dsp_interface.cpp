@@ -172,7 +172,7 @@ void DSPInterface::updateDynamicsS_() {
   IRBlock S_new = S_true + dyn.noise_gain * w_lp;
 
   // renormalize
-  const float eps = 1e-12f;
+  const float eps = 1e-8;
   const float n0 = std::sqrt(S_true.squaredNorm());
   const float n1 = std::sqrt(S_new.squaredNorm());
   if (n0 > eps && n1 > eps) {
@@ -267,12 +267,41 @@ Block DSPInterface::callProcessMicsWithTimeout_(const MicBlock &mb,
   if (!fn)
     return result;
 
-  auto task = std::async(std::launch::async, [&]() { fn(mb, result); });
+  auto busy = processMicsBusy_;
+  bool expected = false;
+  if (!busy->compare_exchange_strong(expected, true,
+                                     std::memory_order_acq_rel)) {
+    return result;
+  }
+
+  std::promise<Block> promise;
+  auto task = promise.get_future();
+  std::thread([fn = std::move(fn), mb, promise = std::move(promise), busy]() mutable {
+    Block control = Block::Zero();
+    try {
+      fn(mb, control);
+      promise.set_value(control);
+    } catch (...) {
+      try {
+        promise.set_exception(std::current_exception());
+      } catch (...) {
+      }
+    }
+    busy->store(false, std::memory_order_release);
+  }).detach();
 
   auto deadline = std::chrono::microseconds(timeoutUs);
   if (task.wait_for(deadline) == std::future_status::timeout) {
     std::cerr << "ProcessMics timeout after " << timeoutUs << " us\n";
-    result = Block::Zero();
+    return result;
+  }
+
+  try {
+    result = task.get();
+  } catch (const std::exception &e) {
+    std::cerr << "ProcessMics exception: " << e.what() << "\n";
+  } catch (...) {
+    std::cerr << "ProcessMics exception: unknown\n";
   }
 
   return result;

@@ -18,6 +18,7 @@
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <memory>
 #include <random>
 #include <thread>
 
@@ -146,6 +147,8 @@ private:
   std::mutex paths_mutex_;
   std::mutex process_mutex_;
   ProcessMicsFn processMics_;
+  std::shared_ptr<std::atomic<bool>> processMicsBusy_ =
+      std::make_shared<std::atomic<bool>>(false);
 
   std::jthread dspThread_;
 

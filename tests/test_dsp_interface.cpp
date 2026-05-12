@@ -4,7 +4,28 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <stdexcept>
 #include <thread>
+
+static std::string resolveTestWavPath() {
+  namespace fs = std::filesystem;
+
+  static const char *kCandidates[] = {
+      "out.wav",
+      "../out.wav",
+      "../../out.wav",
+      "/home/milan/Documents/DSPClass/ANC/out.wav",
+  };
+
+  for (const char *candidate : kCandidates) {
+    if (fs::exists(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw std::runtime_error("Could not locate out.wav");
+}
 
 // Helper: create params with simple delta impulse responses
 static Params makeTestParams() {
@@ -18,8 +39,9 @@ static Params makeTestParams() {
 
   // Use WAV file (will need to provide paths)
   p.audioConfig.type = AudioSourceFactory::Type::WavFile;
-  p.audioConfig.inputWavPath = "";
+  p.audioConfig.inputWavPath = resolveTestWavPath();
   p.audioConfig.outputWavPath = "";
+  p.audioConfig.loop = true;
 
   // Very low noise so we can reason about signals
   p.noise.sample_sigma = 0.001f;
@@ -129,6 +151,78 @@ TEST(mic_block_has_sequence) {
   ASSERT_TRUE(lastSeq.load() > 0);
 }
 
+TEST(blocking_process_mics_falls_back_to_zero_control) {
+  Params p = makeTestParams();
+  p.noise.sample_sigma = 0.0f;
+  p.noise.fc_mean_hz = 0.0f;
+  p.noise.sigma_fc_hz = 0.0f;
+  p.paths.H.setZero();
+  p.paths.P.setZero();
+  p.paths.C.setZero();
+  p.paths.speaker.setZero();
+  p.paths.speaker(0) = 1.0f;
+  p.state.S.setZero();
+  p.state.S_true.setZero();
+  p.state.S(0) = 1.0f;
+  p.state.S_true(0) = 1.0f;
+
+  DSPInterface dsp(p, 3);
+
+  std::atomic<int> callbackCount{0};
+  dsp.setProcessMics([&](const MicBlock &, Block &control) {
+    callbackCount.fetch_add(1, std::memory_order_relaxed);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    control = Block::Ones() * 0.5f;
+  });
+
+  std::optional<MicBlock> latest;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(200);
+
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (auto mic = dsp.getMics()) {
+      latest = mic;
+      if (latest->seq > 3) {
+        break;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  ASSERT_TRUE(latest.has_value());
+  ASSERT_TRUE(callbackCount.load(std::memory_order_relaxed) > 0);
+  ASSERT_TRUE(latest->seq > 3);
+  ASSERT_NEAR(latest->inear.cwiseAbs().maxCoeff(), 0.0f, 1e-6f);
+}
+
+TEST(blocking_process_mics_does_not_delay_shutdown) {
+  Params p = makeTestParams();
+  std::atomic<int> callbackCount{0};
+
+  const auto start = std::chrono::steady_clock::now();
+  {
+    DSPInterface dsp(p, 3);
+    dsp.setProcessMics([&](const MicBlock &, Block &control) {
+      callbackCount.fetch_add(1, std::memory_order_relaxed);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+      control = Block::Ones();
+    });
+
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(100);
+    while (callbackCount.load(std::memory_order_relaxed) == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - start)
+                           .count();
+
+  ASSERT_TRUE(callbackCount.load(std::memory_order_relaxed) > 0);
+  ASSERT_TRUE(elapsed < 500);
+}
+
 int main() {
   RUN_TEST(constructs_and_destructs);
   RUN_TEST(getMics_returns_data);
@@ -136,6 +230,8 @@ int main() {
   RUN_TEST(processMics_callback_invoked);
   RUN_TEST(zero_control_inear_matches_noise_path);
   RUN_TEST(mic_block_has_sequence);
+  RUN_TEST(blocking_process_mics_falls_back_to_zero_control);
+  RUN_TEST(blocking_process_mics_does_not_delay_shutdown);
   PRINT_RESULTS();
   return g_fails > 0 ? 1 : 0;
 }

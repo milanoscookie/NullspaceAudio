@@ -1,8 +1,6 @@
 #pragma once
 
 #include "dsp_config.h"
-#include <Eigen/Dense>
-#include <unsupported/Eigen/FFT>
 
 // Fast convolution using overlap-add FFT method
 template <int IR_SIZE> class FastLinearSystem {
@@ -21,6 +19,7 @@ public:
   FastLinearSystem() {
     H_fft_.setZero();
     overlap_.setZero();
+    x_padded_.setZero();
   }
 
   FastLinearSystem(const IRBlock &impulseResponse) : FastLinearSystem() {
@@ -42,34 +41,23 @@ public:
 
   // Fast overlap-add convolution
   void step(const Block &input, Block &output) {
-    // Zero-pad input to FFT_SIZE
-    RealFFTBlock x_padded;
-    x_padded.setZero();
-    x_padded.head(dsp::BLOCK_SIZE) = input;
+    x_padded_.head(dsp::BLOCK_SIZE) = input;
 
-    // FFT of input
-    FFTBlock X_fft;
-    fft_.fwd(X_fft, x_padded);
+    fft_.fwd(X_fft_, x_padded_);
 
-    // Frequency-domain multiplication (pointwise)
-    FFTBlock Y_fft = X_fft.cwiseProduct(H_fft_);
+    Y_fft_ = X_fft_.cwiseProduct(H_fft_);
 
-    // IFFT back to time domain
-    RealFFTBlock y_full;
-    fft_.inv(y_full, Y_fft);
+    fft_.inv(y_full_, Y_fft_);
 
-    // Overlap-add: first BLOCK_SIZE samples + overlap from previous block
     for (int i = 0; i < dsp::BLOCK_SIZE; ++i) {
       if (i < OVERLAP_SIZE) {
-        output(i) = y_full(i) + overlap_(i);
+        output(i) = y_full_(i) + overlap_(i);
       } else {
-        output(i) = y_full(i);
+        output(i) = y_full_(i);
       }
     }
 
-    // Save overlap for next block (samples BLOCK_SIZE to
-    // BLOCK_SIZE+OVERLAP_SIZE-1)
-    overlap_ = y_full.segment<OVERLAP_SIZE>(dsp::BLOCK_SIZE);
+    overlap_ = y_full_.template segment<OVERLAP_SIZE>(dsp::BLOCK_SIZE);
   }
 
 private:
@@ -78,4 +66,8 @@ private:
   OverlapBuffer overlap_ = OverlapBuffer::Zero();
 
   Eigen::FFT<float> fft_;
+  RealFFTBlock x_padded_;
+  FFTBlock X_fft_;
+  FFTBlock Y_fft_;
+  RealFFTBlock y_full_;
 };

@@ -1,4 +1,7 @@
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFTW3 REQUIRED IMPORTED_TARGET fftw3f fftw3)
+
 # DSP Interface Library - builds independently
 add_library(DSPInterface STATIC
   dsp_interface.cpp
@@ -15,8 +18,14 @@ target_include_directories(DSPInterface
     ${CMAKE_SOURCE_DIR}/_deps/eigen
 )
 
+target_compile_definitions(DSPInterface PUBLIC EIGEN_FFTW_DEFAULT)
+
+target_link_libraries(DSPInterface
+  PUBLIC
+    PkgConfig::FFTW3
+)
+
 set_target_properties(DSPInterface PROPERTIES
   VERSION 1.0.0
   SOVERSION 1
 )
-
