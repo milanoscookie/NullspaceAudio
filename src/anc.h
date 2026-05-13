@@ -2,6 +2,7 @@
 
 namespace anc {
 
-constexpr int systemLatencyBlocks = 4;
-void step(const MicBlock &micBlock, Block &control);
+constexpr int systemLatencyBlocks = 1;
+void init();
+void step(const MicBlock &micBlock, dsp::Block &control);
 } // namespace anc

@@ -24,7 +24,7 @@ TEST(samples_written_count) {
   w.open();
   ASSERT_EQ(w.getSamplesWritten(), 0u);
 
-  Block b = Block::Ones();
+  dsp::Block b = dsp::Block::Ones();
   w.writeBlock(b);
   ASSERT_EQ(w.getSamplesWritten(), static_cast<size_t>(dsp::BLOCK_SIZE));
 
@@ -39,7 +39,7 @@ TEST(duration_correct) {
   w.open();
   // Write 1 second worth of blocks
   int blocksPerSecond = dsp::SAMPLE_RATE / dsp::BLOCK_SIZE;
-  Block b = Block::Zero();
+  dsp::Block b = dsp::Block::Zero();
   for (int i = 0; i < blocksPerSecond; ++i)
     w.writeBlock(b);
   float dur = w.getDurationSeconds();
@@ -52,7 +52,7 @@ TEST(wav_header_valid) {
   {
     WavWriter w(TEST_WAV);
     w.open();
-    Block b = Block::Ones() * 0.5f;
+    dsp::Block b = dsp::Block::Ones() * 0.5f;
     w.writeBlock(b);
     w.close();
   }
@@ -75,7 +75,7 @@ TEST(file_size_reasonable) {
   {
     WavWriter w(TEST_WAV);
     w.open();
-    Block b = Block::Zero();
+    dsp::Block b = dsp::Block::Zero();
     w.writeBlock(b);
     w.close();
   }

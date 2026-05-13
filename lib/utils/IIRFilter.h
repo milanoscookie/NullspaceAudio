@@ -6,7 +6,7 @@
 // 2nd Order IIR Filter
 class IIRFilter {
 public:
-  using Block = Eigen::Matrix<float, dsp::BLOCK_SIZE, 1>;
+  using Block = dsp::Block;
   using FilterCoeff = Eigen::Matrix<float, 5, 1>; // [b0, b1, b2, a1, a2]
 
   IIRFilter() : coeffs_(identityCoeffs()) {}
@@ -38,7 +38,7 @@ public:
       out_(i) = filterSample(input(i));
     }
     return out_;
-  };
+  }
 
 private:
   FilterCoeff coeffs_ = identityCoeffs();

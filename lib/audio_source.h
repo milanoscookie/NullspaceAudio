@@ -1,57 +1,43 @@
 #pragma once
 
 #include "dsp_config.h"
-#include <Eigen/Dense>
+
 #include <functional>
 #include <memory>
 #include <string>
 
-using Block = Eigen::Matrix<float, dsp::BLOCK_SIZE, 1>;
-
-/**
- * @brief Abstract interface for audio sources (WAV file, etc.)
- */
 class AudioSource {
 public:
-  using AudioCallback = std::function<void(const Block &input, Block &output)>;
+  using AudioCallback =
+      std::function<void(const dsp::Block &input, dsp::Block &output)>;
 
   virtual ~AudioSource() = default;
 
-  /**
-   * @brief Open the audio source with a callback
-   * @param callback Function called for each audio block
-   */
+  // RT-unsafe.
+  // Registers the processing callback and acquires source resources.
   virtual void open(AudioCallback callback) = 0;
 
-  /**
-   * @brief Start streaming audio
-   */
+  // RT-unsafe.
+  // Starts background streaming.
   virtual void start() = 0;
 
-  /**
-   * @brief Stop streaming audio
-   */
+  // RT-unsafe.
+  // Stops background streaming and may wait for shutdown.
   virtual void stop() = 0;
 
-  /**
-   * @brief Close and release resources
-   */
+  // RT-unsafe.
+  // Releases source resources.
   virtual void close() = 0;
 
-  /**
-   * @brief Check if source is running
-   */
+  // RT-safe.
+  // Returns whether streaming is active.
   virtual bool isRunning() const = 0;
 
-  /**
-   * @brief Get sample rate
-   */
+  // RT-safe.
+  // Returns the configured sample rate.
   virtual int getSampleRate() const = 0;
 };
 
-/**
- * @brief Factory to create audio sources
- */
 class AudioSourceFactory {
 public:
   enum class Type { WavFile };
@@ -59,11 +45,12 @@ public:
   struct Config {
     Type type = Type::WavFile;
 
-    // WAV file options
     std::string inputWavPath;
     std::string outputWavPath;
-    bool loop = false; // Loop WAV file when it ends
+    bool loop = false;
   };
 
+  // RT-unsafe.
+  // Allocates and configures a concrete audio source.
   static std::unique_ptr<AudioSource> create(const Config &config);
 };

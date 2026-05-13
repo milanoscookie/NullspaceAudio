@@ -45,8 +45,12 @@ static Params makeTestParams() {
 
   // Very low noise so we can reason about signals
   p.noise.sample_sigma = 0.001f;
-  p.noise.fc_mean_hz = 100.0f;
-  p.noise.sigma_fc_hz = 10.0f;
+  p.noise.centerFreqMinHz = 300.0f;
+  p.noise.centerFreqMaxHz = 700.0f;
+  p.noise.sweepHalfPeriodSeconds = 1.0f;
+  p.noise.bandwidthHz = 30.0f;
+  p.noise.centerFreqBrownianStddevHz = 3.0f;
+  p.noise.centerFreqBrownianPole = 0.995f;
   p.dynamics.noise_gain = 0.0f; // disable S drift for testing
 
   return p;
@@ -56,7 +60,7 @@ TEST(constructs_and_destructs) {
   Params p = makeTestParams();
   {
     DSPInterface dsp(p, 3);
-    dsp.setProcessMics([](const MicBlock &, Block &control) {
+    dsp.setProcessMics([](const MicBlock &, dsp::Block &control) {
       control.setZero();
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -68,7 +72,7 @@ TEST(constructs_and_destructs) {
 TEST(getMics_returns_data) {
   Params p = makeTestParams();
   DSPInterface dsp(p, 3);
-  dsp.setProcessMics([](const MicBlock &, Block &control) {
+  dsp.setProcessMics([](const MicBlock &, dsp::Block &control) {
     control.setZero();
   });
 
@@ -76,6 +80,7 @@ TEST(getMics_returns_data) {
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   auto mic = dsp.getMics();
   ASSERT_TRUE(mic.has_value());
+  ASSERT_TRUE(std::isfinite(mic->desiredAudio.sum()));
 }
 
 TEST(sendControl_is_readable) {
@@ -83,7 +88,7 @@ TEST(sendControl_is_readable) {
   DSPInterface dsp(p, 3);
 
   std::atomic<bool> received{false};
-  dsp.setProcessMics([&](const MicBlock &mb, Block &control) {
+  dsp.setProcessMics([&](const MicBlock &mb, dsp::Block &control) {
     // Just check inear has some value (from noise at least)
     if (mb.inear.cwiseAbs().maxCoeff() > 0.0f || true) {
       received.store(true, std::memory_order_relaxed);
@@ -92,7 +97,7 @@ TEST(sendControl_is_readable) {
   });
 
   // Send a control signal
-  Block ctrl = Block::Ones() * 0.1f;
+  dsp::Block ctrl = dsp::Block::Ones() * 0.1f;
   dsp.sendControl(ctrl);
 
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -104,7 +109,7 @@ TEST(processMics_callback_invoked) {
   DSPInterface dsp(p, 3);
 
   std::atomic<int> count{0};
-  dsp.setProcessMics([&](const MicBlock &, Block &control) {
+  dsp.setProcessMics([&](const MicBlock &, dsp::Block &control) {
     count.fetch_add(1, std::memory_order_relaxed);
     control.setZero();
   });
@@ -119,11 +124,9 @@ TEST(zero_control_inear_matches_noise_path) {
   // With zero control, inear should be P*noise only
   Params p = makeTestParams();
   p.noise.sample_sigma = 0.0f; // disable noise generator
-  p.noise.fc_mean_hz = 0.0f;
-  p.noise.sigma_fc_hz = 0.0f;
   
   DSPInterface dsp(p, 3);
-  dsp.setProcessMics([](const MicBlock &, Block &control) {
+  dsp.setProcessMics([](const MicBlock &, dsp::Block &control) {
     control.setZero();
   });
 
@@ -133,8 +136,26 @@ TEST(zero_control_inear_matches_noise_path) {
   // With no noise and no real mic input, signals should be near zero
   // (WAV file input will depend on the source file)
   // Just verify it's finite
+  ASSERT_TRUE(std::isfinite(mic->desiredAudio.sum()));
   ASSERT_TRUE(std::isfinite(mic->outside.sum()));
   ASSERT_TRUE(std::isfinite(mic->inear.sum()));
+}
+
+TEST(mic_block_carries_desired_audio) {
+  Params p = makeTestParams();
+  p.noise.sample_sigma = 0.0f;
+  p.noise.wav_to_reference_gain = 0.0f;
+
+  DSPInterface dsp(p, 3);
+  dsp.setProcessMics([](const MicBlock &, dsp::Block &control) {
+    control.setZero();
+  });
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  auto mic = dsp.getMics();
+  ASSERT_TRUE(mic.has_value());
+  ASSERT_TRUE(std::isfinite(mic->desiredAudio.sum()));
+  ASSERT_TRUE(mic->desiredAudio.cwiseAbs().maxCoeff() > 0.0f);
 }
 
 TEST(mic_block_has_sequence) {
@@ -142,7 +163,7 @@ TEST(mic_block_has_sequence) {
   DSPInterface dsp(p, 3);
 
   std::atomic<uint64_t> lastSeq{0};
-  dsp.setProcessMics([&](const MicBlock &mb, Block &control) {
+  dsp.setProcessMics([&](const MicBlock &mb, dsp::Block &control) {
     lastSeq.store(mb.seq, std::memory_order_relaxed);
     control.setZero();
   });
@@ -154,8 +175,6 @@ TEST(mic_block_has_sequence) {
 TEST(blocking_process_mics_falls_back_to_zero_control) {
   Params p = makeTestParams();
   p.noise.sample_sigma = 0.0f;
-  p.noise.fc_mean_hz = 0.0f;
-  p.noise.sigma_fc_hz = 0.0f;
   p.paths.H.setZero();
   p.paths.P.setZero();
   p.paths.C.setZero();
@@ -169,10 +188,10 @@ TEST(blocking_process_mics_falls_back_to_zero_control) {
   DSPInterface dsp(p, 3);
 
   std::atomic<int> callbackCount{0};
-  dsp.setProcessMics([&](const MicBlock &, Block &control) {
+  dsp.setProcessMics([&](const MicBlock &, dsp::Block &control) {
     callbackCount.fetch_add(1, std::memory_order_relaxed);
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    control = Block::Ones() * 0.5f;
+    control = dsp::Block::Ones() * 0.5f;
   });
 
   std::optional<MicBlock> latest;
@@ -202,10 +221,10 @@ TEST(blocking_process_mics_does_not_delay_shutdown) {
   const auto start = std::chrono::steady_clock::now();
   {
     DSPInterface dsp(p, 3);
-    dsp.setProcessMics([&](const MicBlock &, Block &control) {
+    dsp.setProcessMics([&](const MicBlock &, dsp::Block &control) {
       callbackCount.fetch_add(1, std::memory_order_relaxed);
       std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-      control = Block::Ones();
+      control = dsp::Block::Ones();
     });
 
     const auto deadline = std::chrono::steady_clock::now() +
@@ -229,6 +248,7 @@ int main() {
   RUN_TEST(sendControl_is_readable);
   RUN_TEST(processMics_callback_invoked);
   RUN_TEST(zero_control_inear_matches_noise_path);
+  RUN_TEST(mic_block_carries_desired_audio);
   RUN_TEST(mic_block_has_sequence);
   RUN_TEST(blocking_process_mics_falls_back_to_zero_control);
   RUN_TEST(blocking_process_mics_does_not_delay_shutdown);

@@ -1,8 +1,30 @@
 #include "anc.h"
-void anc::step(const MicBlock &micBlock, Block &control) {
-    // Simple feedforward ANC: use in-ear mic to estimate noise and invert it for control. This will work work due to acoustic noise propigation
-    // The control signal is delayed by systemLatencyBlocks * block size samples to account for the time it takes for the control signal to propagate through the system and for the next mic block to be read in. 
-    control = -micBlock.inear;
 
-    // std::this_thread::sleep_for(std::chrono::milliseconds{0});
+namespace {
+
+using namespace dsp;
+struct AncState {
+  bool initialized = false;
+};
+
+AncState gState;
+
+} // namespace
+
+void anc::init() {
+  gState = AncState{};
+  gState.initialized = true;
+}
+
+void anc::step(const MicBlock &micBlock, Block &control) {
+  if (!gState.initialized) {
+    control = Block::Zero();
+    return;
+  }
+
+  // Simple feedforward ANC: use in-ear mic to estimate noise and invert it for
+  // control. The control signal is delayed by systemLatencyBlocks * block size
+  // samples to account for propagation and block processing latency.
+  // (void)micBlock;
+  control = Block::Zero();
 }

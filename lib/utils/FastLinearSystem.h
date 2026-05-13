@@ -5,16 +5,27 @@
 // Fast convolution using overlap-add FFT method
 template <int IR_SIZE> class FastLinearSystem {
 public:
-  using Block = Eigen::Matrix<float, dsp::BLOCK_SIZE, 1>;
+  using Block = dsp::Block;
   using IRBlock = Eigen::Matrix<float, IR_SIZE, 1>;
 
-  // FFT size must be >= BLOCK_SIZE + IR_SIZE - 1 for linear convolution
-  static constexpr int FFT_SIZE = 2048; // Next power of 2 after 256+1024-1=1279
-  static constexpr int OVERLAP_SIZE = IR_SIZE - 1; // 1023 samples
+  static constexpr int convolutionSize() {
+    int size = 1;
+    const int requiredSize = dsp::BLOCK_SIZE + IR_SIZE - 1;
+    while (size < requiredSize) {
+      size <<= 1;
+    }
+    return size;
+  }
+
+  static constexpr int FFT_SIZE = convolutionSize();
+  static constexpr int OVERLAP_SIZE = IR_SIZE - 1;
 
   using FFTBlock = Eigen::Matrix<std::complex<float>, FFT_SIZE, 1>;
   using RealFFTBlock = Eigen::Matrix<float, FFT_SIZE, 1>;
   using OverlapBuffer = Eigen::Matrix<float, OVERLAP_SIZE, 1>;
+
+  static_assert(FFT_SIZE >= dsp::BLOCK_SIZE + OVERLAP_SIZE,
+                "FFT_SIZE must hold a full block convolution result");
 
   FastLinearSystem() {
     H_fft_.setZero();
@@ -29,7 +40,6 @@ public:
   void setImpulseResponse(const IRBlock &impulseResponse) {
     impulseResponse_ = impulseResponse;
 
-    // Precompute FFT of impulse response (zero-padded to FFT_SIZE)
     RealFFTBlock h_padded;
     h_padded.setZero();
     h_padded.head(IR_SIZE) = impulseResponse;
@@ -39,7 +49,6 @@ public:
 
   const IRBlock &getImpulseResponse() const { return impulseResponse_; }
 
-  // Fast overlap-add convolution
   void step(const Block &input, Block &output) {
     x_padded_.head(dsp::BLOCK_SIZE) = input;
 

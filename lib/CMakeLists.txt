@@ -6,6 +6,7 @@ pkg_check_modules(FFTW3 REQUIRED IMPORTED_TARGET fftw3f fftw3)
 add_library(DSPInterface STATIC
   dsp_interface.cpp
   audio_source.cpp
+  simulator_paths.cpp
   wav_file_source.cpp
   wav_writer.cpp
 )

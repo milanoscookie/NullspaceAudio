@@ -1,29 +1,15 @@
 #pragma once
 
 #include "dsp_config.h"
-#include <Eigen/Dense>
+
 #include <fstream>
 #include <string>
 #include <vector>
 
-using Block = Eigen::Matrix<float, dsp::BLOCK_SIZE, 1>;
-
-/**
- * @brief Simple WAV file writer for exporting audio data
- *
- * Usage:
- *   WavWriter writer("output.wav");
- *   writer.open();
- *   writer.writeBlock(block1);
- *   writer.writeBlock(block2);
- *   writer.close();  // Finalizes header with correct size
- */
-
-// Forward declare Config outside the class
 struct WavWriterConfig {
   int sampleRate = dsp::SAMPLE_RATE;
   int numChannels = 1;
-  int bitsPerSample = 16; // 16 or 32 (float)
+  int bitsPerSample = 16;
 };
 
 class WavWriter {
@@ -33,48 +19,36 @@ public:
   explicit WavWriter(const std::string &path, const Config &config = {});
   ~WavWriter();
 
-  // Non-copyable
   WavWriter(const WavWriter &) = delete;
   WavWriter &operator=(const WavWriter &) = delete;
 
-  /**
-   * @brief Open the file for writing
-   */
+  // RT-unsafe.
+  // Opens the destination file and writes a placeholder header.
   bool open();
 
-  /**
-   * @brief Write a single block of samples
-   */
-  void writeBlock(const Block &block);
+  // RT-unsafe.
+  // Writes one DSP block to the file.
+  void writeBlock(const dsp::Block &block);
 
-  /**
-   * @brief Write arbitrary float samples
-   */
+  // RT-unsafe.
+  // Writes arbitrary floating-point samples.
   void writeSamples(const float *samples, size_t count);
 
-  /**
-   * @brief Write a vector of samples
-   */
+  // RT-unsafe.
+  // Writes a contiguous vector of floating-point samples.
   void writeSamples(const std::vector<float> &samples);
 
-  /**
-   * @brief Close and finalize the file (updates header with correct size)
-   */
+  // RT-unsafe.
+  // Finalizes the header and closes the file.
   void close();
 
-  /**
-   * @brief Check if file is open
-   */
+  // RT-safe.
   bool isOpen() const { return file_.is_open(); }
 
-  /**
-   * @brief Get number of samples written
-   */
+  // RT-safe.
   size_t getSamplesWritten() const { return samplesWritten_; }
 
-  /**
-   * @brief Get duration in seconds
-   */
+  // RT-safe.
   float getDurationSeconds() const {
     return static_cast<float>(samplesWritten_) / config_.sampleRate;
   }

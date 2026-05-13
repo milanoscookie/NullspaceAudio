@@ -1,39 +1,51 @@
 #pragma once
 
 #include "audio_source.h"
+
 #include <atomic>
 #include <fstream>
-#include <memory>
 #include <thread>
 #include <vector>
 
-/**
- * @brief WAV file audio source - pre-buffers entire file in heap memory
- */
 class WavFileSource : public AudioSource {
 public:
   struct Config {
     std::string inputPath;
-    std::string outputPath; // Empty = no output
+    std::string outputPath;
     bool loop = false;
   };
 
   explicit WavFileSource(const Config &config);
   ~WavFileSource() override;
 
+  // RT-unsafe.
+  // Loads the WAV file, opens optional output, and stores the callback.
   void open(AudioCallback callback) override;
+
+  // RT-unsafe.
+  // Starts the streaming thread.
   void start() override;
+
+  // RT-unsafe.
+  // Stops the streaming thread and may block until it exits.
   void stop() override;
+
+  // RT-unsafe.
+  // Stops streaming and releases file-backed resources.
   void close() override;
+
+  // RT-safe.
   bool isRunning() const override { return running_.load(); }
+
+  // RT-safe.
   int getSampleRate() const override { return sampleRate_; }
 
 private:
   void processThread();
   bool readWavFile();
-  bool readBlock(Block &block);
+  bool readBlock(dsp::Block &block);
   void writeWavHeader();
-  void writeBlock(const Block &block);
+  void writeBlock(const dsp::Block &block);
   void finalizeWavOutput();
 
   Config config_;
@@ -44,16 +56,13 @@ private:
   std::atomic<bool> running_{false};
   std::thread processThread_;
 
-  // WAV format info
   int sampleRate_ = dsp::SAMPLE_RATE;
   int numChannels_ = 1;
   int bitsPerSample_ = 16;
   size_t totalSamples_ = 0;
 
-  // Pre-buffered audio data (float samples)
   std::vector<float> audioBuffer_;
   size_t currentSample_ = 0;
 
-  // Output tracking
   size_t samplesWritten_ = 0;
 };

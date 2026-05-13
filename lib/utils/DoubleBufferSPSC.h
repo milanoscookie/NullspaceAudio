@@ -1,4 +1,5 @@
 #pragma once
+
 #include <atomic>
 #include <cstdint>
 
@@ -10,8 +11,7 @@ public:
     const uint64_t next = seq_.load(std::memory_order_relaxed) + 1;
     const int idx = indexFromSeq_(next);
 
-    buf_[idx] = value; // copy assignment? may be an issue; For templated
-                       // Eigen::Maxtrix, this is not an issue
+    buf_[idx] = value;
 
     seq_.store(next, std::memory_order_release);
   }
@@ -23,7 +23,6 @@ public:
   }
 
   void commit() {
-    // beginWrite was called?
     seq_.store(pending_seq_, std::memory_order_release);
   }
 
@@ -55,7 +54,6 @@ private:
     return static_cast<int>(seq & 1ull);
   }
 
-  // CPU cache
   alignas(64) mutable T buf_[2] = {T{}, T{}};
   alignas(64) std::atomic<uint64_t> seq_{0};
 

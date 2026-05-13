@@ -1,84 +1,76 @@
 #pragma once
 
+#include "audio_source.h"
+#include "dsp_config.h"
+#include "utils/BandPassBiquadCoeff.h"
 #include "utils/DoubleBufferSPSC.h"
 #include "utils/FastLinearSystem.h"
 #include "utils/IIRFilter.h"
-#include "utils/LPButterworthCoeff.h"
 #include "utils/RingBuffer.h"
-
-#include "audio_source.h"
-#include "dsp_config.h"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <ctime>
 #include <functional>
-#include <future>
-#include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
-#include <memory>
 #include <random>
 #include <thread>
+#include <vector>
 
-#include <Eigen/Dense>
-
-using Block = Eigen::Matrix<float, dsp::BLOCK_SIZE, 1>;
-using IRBlock = Eigen::Matrix<float, dsp::IR_SIZE, 1>;
-using IIRState = Eigen::Matrix<float, dsp::IIR_STATE_SIZE, 1>;
-
-using ContextBuffer = RingBuffer<Block, dsp::CONTEXT_BLOCKS>;
+using ContextBuffer = RingBuffer<dsp::Block, dsp::CONTEXT_BLOCKS>;
 
 using Clock = std::chrono::steady_clock;
 
 struct MicBlock {
-  Block outside;
-  Block inear;
+  dsp::Block desiredAudio;
+  dsp::Block outside;
+  dsp::Block inear;
   Clock::time_point timestamp = Clock::time_point{};
   uint64_t seq = 0;
 };
 
-constexpr size_t MIC_QUEUE_SIZE = 32;
+constexpr size_t kMicQueueSize = 32;
 
-using MicQueue = RingBuffer<MicBlock, MIC_QUEUE_SIZE>;
+using MicQueue = RingBuffer<MicBlock, kMicQueueSize>;
 
 struct Timing {
-  int loop_latency_samp =
-      0; // total loop latency (speaker->mics->compute->speaker)
+  int loopLatencySamples = 0;
 };
 
 struct Dynamics {
-
-  // s = s_true + damping LPF(noise)
-  // s renormalized
-  // s gets clipped as well to prevent blowing up power
-  float noise_gain = 0.001f;
+  float noise_gain = dsp::sim::kDefaultModelConfig.secondaryPathDriftGain;
 };
 
 struct NoiseModel {
   float outside_mic_stddev = 0.0f;
   float inear_mic_stddev = 0.0f;
+  float wav_to_reference_gain = dsp::sim::kDefaultModelConfig.wavToReferenceGain;
+  float noise_gain = dsp::sim::kDefaultModelConfig.noise.noiseGain;
 
-  float fc_mean_hz = 500.0f;
-  float sigma_fc_hz = 50.0f;
-  float fc_lpf_hz = 30.0f;
-  float sample_sigma = 0.01f;
-
-  IIRFilter S_noise_filter = IIRFilter(IIRFilter::identityCoeffs());
-  IIRFilter noise_color_filter = IIRFilter(IIRFilter::identityCoeffs());
+  float centerFreqMinHz = dsp::sim::kDefaultModelConfig.noise.centerFreqMinHz;
+  float centerFreqMaxHz = dsp::sim::kDefaultModelConfig.noise.centerFreqMaxHz;
+  float sweepHalfPeriodSeconds =
+      dsp::sim::kDefaultModelConfig.noise.sweepHalfPeriodSeconds;
+  float bandwidthHz = dsp::sim::kDefaultModelConfig.noise.bandwidthHz;
+  float centerFreqBrownianStddevHz =
+      dsp::sim::kDefaultModelConfig.noise.centerFreqBrownianStddevHz;
+  float centerFreqBrownianPole =
+      dsp::sim::kDefaultModelConfig.noise.centerFreqBrownianPole;
+  float sample_sigma = dsp::sim::kDefaultModelConfig.noise.sampleSigma;
 };
 
 struct Paths {
-  IRBlock H = IRBlock::Zero();       // noise -> outside mic
-  IRBlock P = IRBlock::Zero();       // noise -> in-ear mic
-  IRBlock C = IRBlock::Zero();       // speaker -> outside mic
-  IRBlock speaker = IRBlock::Zero(); // non-flat speaker response
+  dsp::IRBlock H = dsp::IRBlock::Zero();
+  dsp::IRBlock P = dsp::IRBlock::Zero();
+  dsp::IRBlock C = dsp::IRBlock::Zero();
+  dsp::IRBlock speaker = dsp::IRBlock::Zero();
 };
 
 struct State {
-  IRBlock S = IRBlock::Zero(); // S_k (evolving transfer function)
-  IRBlock S_true = IRBlock::Zero();
+  dsp::IRBlock S = dsp::IRBlock::Zero();
+  dsp::IRBlock S_true = dsp::IRBlock::Zero();
 
   ContextBuffer S_context;
 
@@ -87,86 +79,102 @@ struct State {
 };
 
 struct Params {
+  Params();
+  explicit Params(const AudioSourceFactory::Config &audioConfig);
+
   Timing timing;
   Dynamics dynamics;
   NoiseModel noise;
   Paths paths;
   State state;
-  AudioSourceFactory::Config audioConfig; // WAV file
+  AudioSourceFactory::Config audioConfig;
 };
 
 class DSPInterface {
-
 public:
-  DSPInterface(Params &params, int systemLatencyBlocks);
-
+  DSPInterface(const AudioSourceFactory::Config &audioConfig,
+               int systemLatencyBlocks);
+  DSPInterface(const Params &params, int systemLatencyBlocks);
   ~DSPInterface();
 
   DSPInterface(const DSPInterface &) = delete;
   DSPInterface &operator=(const DSPInterface &) = delete;
 
+  // RT-safe.
+  // Returns the control-to-output latency in blocks.
   int getSystemLatency() const { return systemLatencyBlocks_; }
+
+  // RT-unsafe.
+  // Updates the control-to-output latency and resizes related buffering.
   void setSystemLatency(int latency) { systemLatencyBlocks_ = latency; }
 
-  // Read input samples into buffer
+  // RT-safe.
+  // Returns the latest published microphone block if one is available.
   std::optional<MicBlock> getMics();
 
-  // Pass in control noise cancelling signal
-  void sendControl(const Block &control);
+  // RT-safe.
+  // Publishes one control block for plant propagation.
+  void sendControl(const dsp::Block &control);
 
+  // RT-safe.
   const Timing &getTiming() const { return params_.timing; }
+
+  // RT-safe.
   const Dynamics &getDynamics() const { return params_.dynamics; }
+
+  // RT-safe.
   const NoiseModel &getNoiseModel() const { return params_.noise; }
+
+  // RT-safe.
   const Paths &getPaths() const { return params_.paths; }
 
-  // Check if audio source is still running
+  // RT-safe.
+  // Returns whether the backing audio source is still running.
   bool isAudioSourceRunning() const {
     return audioSource_ && audioSource_->isRunning();
   }
 
-  using ProcessMicsFn = std::function<void(const MicBlock &, Block &)>;
+  using ProcessMicsFn = std::function<void(const MicBlock &, dsp::Block &)>;
+
+  // RT-unsafe.
+  // Registers the microphone processing function used by the worker thread.
   void setProcessMics(ProcessMicsFn fn);
 
 private:
   int systemLatencyBlocks_ = 1;
 
-  // Ring buffer of control blocks for system latency compensation
-  std::vector<Block> controlBuf;
+  std::vector<dsp::Block> controlBuf_;
   int controlBufIndex_ = 0;
-  std::mutex controlBuf_mutex_;
+  std::mutex controlBufMutex_;
 
-  // Latest mic block for app observation (getMics)
-  DoubleBufferSPSC<MicBlock> inputBuf;
+  DoubleBufferSPSC<MicBlock> inputBuf_;
 
-  // Mic blocks queued for DSP thread processing
   std::condition_variable mic_cv_;
   std::mutex mic_mutex_;
   std::atomic<uint64_t> mic_seq_{0};
   MicQueue micQueue_;
 
-  std::mutex paths_mutex_;
-  std::mutex process_mutex_;
+  std::mutex pathsMutex_;
+  std::mutex processMutex_;
   ProcessMicsFn processMics_;
   std::shared_ptr<std::atomic<bool>> processMicsBusy_ =
       std::make_shared<std::atomic<bool>>(false);
 
   std::jthread dspThread_;
 
-  // Audio source (WAV file)
   std::unique_ptr<AudioSource> audioSource_;
-  void audioCallback_(const Block &input, Block &output);
+  void audioCallback_(const dsp::Block &input, dsp::Block &output);
 
-  void step_();            // advance simulation by 1 block
-  void updateDynamicsS_(); // update secondary path dynamics (slowly drifting
-                           // S_true + noise)
-  void
-  updateNoiseProfile_(); // update noise model (noise stddev & varying color)
+  void step_();
+  void updateDynamicsS_();
+  void updateNoiseProfile_();
 
-  // Full plant: outside = H*n + C*speaker(u), inear = P*n + S*speaker(u)
-  void propagatePlant_(const Block &u, const Block &n, MicBlock &mb);
+  void propagatePlant_(const dsp::Block &u,
+                       const dsp::Block &referenceNoise,
+                       const dsp::Block &inearNoise, MicBlock &mb);
 
-  Block generateMicNoiseBlock_();
-  float computeStddev_(const Block &b) const;
+  dsp::Block generateMicNoiseBlock_();
+  float computeStddev_(const dsp::Block &block) const;
 
   Params params_;
 
@@ -177,17 +185,22 @@ private:
   FastLinearSystem<dsp::IR_SIZE> speakerSystem_;
 
   void dspThreadLoop_(std::stop_token st);
-  Block callProcessMicsWithTimeout_(const MicBlock &mb, int timeoutUs);
+  dsp::Block callProcessMicsWithTimeout_(const MicBlock &micBlock,
+                                         int timeoutUs);
 
-  // preallocate scratch buffers for plant propagation
-  Block u_spk_ = Block::Zero();
-  Block yC_ = Block::Zero(); // speaker -> outside mic
-  Block yS_ = Block::Zero(); // speaker -> in-ear mic
-  Block yH_ = Block::Zero(); // noise -> outside mic
-  Block yP_ = Block::Zero(); // noise -> in-ear mic
+  dsp::Block u_spk_ = dsp::Block::Zero();
+  dsp::Block yC_ = dsp::Block::Zero();
+  dsp::Block yS_ = dsp::Block::Zero();
+  dsp::Block yH_ = dsp::Block::Zero();
+  dsp::Block yP_ = dsp::Block::Zero();
 
-  Block lastOutside_ = Block::Zero();
-  Block lastInear_ = Block::Zero();
+  dsp::Block lastOutside_ = dsp::Block::Zero();
+  dsp::Block lastInear_ = dsp::Block::Zero();
+
+  IIRFilter noiseBandPassFilter_ = IIRFilter(IIRFilter::identityCoeffs());
+  BandPassBiquadCoeff noiseBandPassCoeff_;
+  float noiseSweepPhase_ = 0.0f;
+  float centerFreqBrownianStateHz_ = 0.0f;
 
   std::mt19937 noiseRng_{std::random_device{}()};
 };

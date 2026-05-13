@@ -20,7 +20,7 @@ int main(int argc, char *argv[]) {
           << "  output_prefix  : Prefix for output files (default: output)"
           << std::endl;
       std::cout
-          << "Output files: <prefix>_outside_mic.wav, <prefix>_inear_mic.wav"
+          << "Output files: <prefix>_desired_audio.wav, <prefix>_outside_mic.wav, <prefix>_inear_mic.wav"
           << std::endl;
       return 0;
     }
@@ -39,86 +39,36 @@ int main(int argc, char *argv[]) {
     std::cout << "Using input WAV file: " << inputWavFile << std::endl;
     std::cout << "Output file prefix: " << outputPrefix << std::endl;
 
-    // Initialize DSP parameters
-    Params params;
+    AudioSourceFactory::Config audioConfig;
+    audioConfig.inputWavPath = inputWavFile;
 
-    // Set input WAV file path
-    params.audioConfig.inputWavPath = inputWavFile;
-    // Set reasonable impulse response parameters
-    // H: noise -> outside mic (realistic microphone coupling)
-    {
-      auto &H = params.paths.H;
-      H(0) = 1.0f;  // Direct path
-      H(1) = 0.5f;  // Early reflection
-      H(2) = 0.25f; // Second reflection
-      H(3) = 0.15f; // Decay
-      // Exponential decay of remaining samples
-      for (size_t i = 4; i < dsp::IR_SIZE; ++i) {
-        H(i) = 0.15f * std::exp(-0.01f * (i - 3));
-      }
-    }
-
-    // P: noise -> in-ear mic (closer to source, slightly different path)
-    {
-      auto &P = params.paths.P;
-      P(0) = 0.9f; // Slightly less direct than H
-      P(1) = 0.4f; // Weaker early reflections
-      P(2) = 0.2f;
-      P(3) = 0.1f;
-      // Exponential decay
-      for (size_t i = 4; i < dsp::IR_SIZE; ++i) {
-        P(i) = 0.1f * std::exp(-0.012f * (i - 3));
-      }
-    }
-
-    // C: speaker -> outside mic (feedback path, secondary path)
-    {
-      auto &C = params.paths.C;
-      C(0) = 0.7f; // Direct speaker coupling
-      C(1) = 0.35f;
-      C(2) = 0.15f;
-      C(3) = 0.08f;
-      // Exponential decay with longer tail
-      for (size_t i = 4; i < dsp::IR_SIZE; ++i) {
-        C(i) = 0.08f * std::exp(-0.008f * (i - 3));
-      }
-    }
-
-    // Speaker: non-flat speaker response
-    {
-      auto &speaker = params.paths.speaker;
-      speaker(0) = 0.95f; // Slightly attenuated direct response
-      speaker(1) = 0.1f;  // Some decay
-      speaker(2) = 0.05f;
-      // Quick decay after initial transient
-      for (size_t i = 3; i < dsp::IR_SIZE; ++i) {
-        speaker(i) = 0.05f * std::exp(-0.02f * (i - 2));
-      }
-    }
-
-    // Set reasonable noise and dynamics parameters
-    params.noise.outside_mic_stddev = 0.001f; // Small ambient noise
-    params.noise.inear_mic_stddev = 0.5f;     // Even less in-ear noise
-    params.dynamics.noise_gain = 0.001f;
-
-    // Create WAV writers for outside and in-ear microphones
+    // Create WAV writers for the raw WAV reference and simulated microphones
+    std::string desiredAudioFile = outputPrefix + "_desired_audio.wav";
     std::string outsideFile = outputPrefix + "_outside_mic.wav";
     std::string inearFile = outputPrefix + "_inear_mic.wav";
+    WavWriter wavWriterDesiredAudio(desiredAudioFile);
     WavWriter wavWriterOutside(outsideFile);
     WavWriter wavWriterInear(inearFile);
+    std::vector<float> desiredAudioSamples;
     std::vector<float> outsideSamples;
     std::vector<float> inearSamples;
     std::mutex sampleMutex;
 
     {
+      anc::init();
+
       // Create DSP interface with n block of system latency
-      DSPInterface dspInterface(params, anc::systemLatencyBlocks);
+      DSPInterface dspInterface(audioConfig, anc::systemLatencyBlocks);
 
       // Set up the microphone processing function
-      dspInterface.setProcessMics([&](const MicBlock &micBlock, Block &control) {
+      dspInterface.setProcessMics([&](const MicBlock &micBlock,
+                                      dsp::Block &control) {
         anc::step(micBlock, control);
 
         std::lock_guard<std::mutex> lk(sampleMutex);
+        desiredAudioSamples.insert(desiredAudioSamples.end(),
+                                   micBlock.desiredAudio.data(),
+                                   micBlock.desiredAudio.data() + dsp::BLOCK_SIZE);
         outsideSamples.insert(outsideSamples.end(), micBlock.outside.data(),
                               micBlock.outside.data() + dsp::BLOCK_SIZE);
         inearSamples.insert(inearSamples.end(), micBlock.inear.data(),
@@ -179,11 +129,13 @@ int main(int argc, char *argv[]) {
                 << std::endl;
     }
 
-    if (!wavWriterOutside.open() || !wavWriterInear.open()) {
+    if (!wavWriterDesiredAudio.open() || !wavWriterOutside.open() ||
+        !wavWriterInear.open()) {
       std::cerr << "Failed to open WAV files for writing" << std::endl;
       return 1;
     }
 
+    wavWriterDesiredAudio.writeSamples(desiredAudioSamples);
     wavWriterOutside.writeSamples(outsideSamples);
     wavWriterInear.writeSamples(inearSamples);
 
