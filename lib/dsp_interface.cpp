@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <future>
 #include <iostream>
 
 namespace {
@@ -32,18 +31,64 @@ Params::Params(const AudioSourceFactory::Config &audioConfig) : Params() {
   this->audioConfig = audioConfig;
 }
 
+void DSPInterface::processWorkerLoop_(std::shared_ptr<ProcessWorkerState> state) {
+  while (true) {
+    MicBlock micBlock;
+    uint64_t seq = 0;
+    ProcessMicsFn processor;
+
+    {
+      std::unique_lock<std::mutex> lk(state->mailboxMutex);
+      state->mailboxCv.wait(lk, [&] { return state->stop || state->jobPending; });
+
+      if (state->stop && !state->jobPending) {
+        return;
+      }
+
+      micBlock = state->pendingMicBlock;
+      seq = state->pendingSeq;
+      state->jobPending = false;
+      state->workerBusy = true;
+    }
+
+    {
+      std::lock_guard<std::mutex> lk(state->processorMutex);
+      processor = state->processor;
+    }
+
+    dsp::Block control = dsp::Block::Zero();
+    std::exception_ptr exception;
+    try {
+      if (processor) {
+        processor(micBlock, control);
+      }
+    } catch (...) {
+      exception = std::current_exception();
+    }
+
+    {
+      std::lock_guard<std::mutex> lk(state->mailboxMutex);
+      state->resultReady = true;
+      state->resultSeq = seq;
+      state->resultControl = control;
+      state->resultException = exception;
+      state->workerBusy = false;
+    }
+    state->mailboxCv.notify_all();
+  }
+}
+
 DSPInterface::DSPInterface(const AudioSourceFactory::Config &audioConfig,
                            int systemLatencyBlocks)
     : DSPInterface(buildDefaultParams(audioConfig), systemLatencyBlocks) {}
 
 DSPInterface::DSPInterface(const Params &params, int systemLatencyBlocks)
-    : params_(params), systemLatencyBlocks_(systemLatencyBlocks) {
-
-  H_system_.setImpulseResponse(params.paths.H);
-  P_system_.setImpulseResponse(params.paths.P);
-  C_system_.setImpulseResponse(params.paths.C);
-  speakerSystem_.setImpulseResponse(params.paths.speaker);
-  S_system_.setImpulseResponse(params.state.S);
+    : systemLatencyBlocks_(systemLatencyBlocks), params_(params) {
+  H_system_.setImpulseResponse(params_.paths.H);
+  P_system_.setImpulseResponse(params_.paths.P);
+  C_system_.setImpulseResponse(params_.paths.C);
+  speakerSystem_.setImpulseResponse(params_.paths.speaker);
+  S_system_.setImpulseResponse(params_.state.S);
 
   const float centerFreqHz =
       0.5f * (params_.noise.centerFreqMinHz + params_.noise.centerFreqMaxHz);
@@ -57,19 +102,16 @@ DSPInterface::DSPInterface(const Params &params, int systemLatencyBlocks)
   for (int i = 0; i < systemLatencyBlocks_; ++i) {
     controlBuf_[i] = dsp::Block::Zero();
   }
-  controlBufIndex_ = 0;
 
-  inputBuf_.publish(MicBlock{.desiredAudio = dsp::Block::Zero(),
-                             .outside = dsp::Block::Zero(),
-                             .inear = dsp::Block::Zero()});
+  inputBuf_.publish(MicBlock{});
 
-  audioSource_ = AudioSourceFactory::create(params.audioConfig);
+  audioSource_ = AudioSourceFactory::create(params_.audioConfig);
+  audioSource_->open(
+      [this](const dsp::Block &input, dsp::Block &output) {
+        audioCallback_(input, output);
+      });
 
-  audioSource_->open([this](const dsp::Block &input, dsp::Block &output) {
-    audioCallback_(input, output);
-  });
-  audioSource_->start();
-
+  std::thread(&DSPInterface::processWorkerLoop_, processState_).detach();
   dspThread_ = std::jthread([this](std::stop_token st) { dspThreadLoop_(st); });
 }
 
@@ -83,11 +125,29 @@ DSPInterface::~DSPInterface() {
     dspThread_.request_stop();
   }
 
+  {
+    std::lock_guard<std::mutex> lk(processState_->mailboxMutex);
+    processState_->stop = true;
+    processState_->jobPending = false;
+  }
+  processState_->mailboxCv.notify_all();
+
+  {
+    std::unique_lock<std::mutex> lk(processState_->mailboxMutex);
+    processState_->mailboxCv.wait_for(lk, std::chrono::milliseconds(10), [&] {
+      return !processState_->workerBusy && !processState_->jobPending;
+    });
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(processState_->processorMutex);
+    processState_->processor = nullptr;
+  }
+
   mic_cv_.notify_all();
 }
 
-void DSPInterface::audioCallback_(const dsp::Block &input,
-                                  dsp::Block &output) {
+void DSPInterface::audioCallback_(const dsp::Block &input, dsp::Block &output) {
   dsp::Block u = dsp::Block::Zero();
   {
     std::lock_guard<std::mutex> lk(controlBufMutex_);
@@ -118,6 +178,15 @@ void DSPInterface::audioCallback_(const dsp::Block &input,
 
   inputBuf_.publish(mb);
 
+  DSPInterface::ObserveMicsFn observeFn;
+  {
+    std::lock_guard<std::mutex> lk(observeMutex_);
+    observeFn = observeMics_;
+  }
+  if (observeFn) {
+    observeFn(mb);
+  }
+
   {
     std::lock_guard<std::mutex> lk(mic_mutex_);
     micQueue_.push_back(mb);
@@ -126,7 +195,6 @@ void DSPInterface::audioCallback_(const dsp::Block &input,
 }
 
 void DSPInterface::dspThreadLoop_(std::stop_token st) {
-  dsp::Block control = dsp::Block::Zero();
   while (!st.stop_requested()) {
     MicBlock mb;
     {
@@ -139,15 +207,16 @@ void DSPInterface::dspThreadLoop_(std::stop_token st) {
         return;
       }
 
-      const MicBlock *p = micQueue_.front();
-      if (!p) {
+      const MicBlock *latest = micQueue_.back();
+      if (!latest) {
         continue;
       }
-      mb = *p;
-      micQueue_.pop_front();
+      mb = *latest;
+      micQueue_.clear();
     }
 
-    control = callProcessMicsWithTimeout_(mb, dsp::BLOCK_LATENCY_US);
+    const dsp::Block control =
+        callProcessMicsWithTimeout_(mb, dsp::BLOCK_LATENCY_US);
 
     {
       std::lock_guard<std::mutex> lk(controlBufMutex_);
@@ -158,8 +227,23 @@ void DSPInterface::dspThreadLoop_(std::stop_token st) {
 }
 
 void DSPInterface::setProcessMics(ProcessMicsFn fn) {
-  std::lock_guard<std::mutex> lk(processMutex_);
-  processMics_ = std::move(fn);
+  std::lock_guard<std::mutex> lk(processState_->processorMutex);
+  processState_->processor = std::move(fn);
+  startAudioSourceIfNeeded_();
+}
+
+void DSPInterface::setObserveMics(DSPInterface::ObserveMicsFn fn) {
+  std::lock_guard<std::mutex> lk(observeMutex_);
+  observeMics_ = std::move(fn);
+}
+
+void DSPInterface::startAudioSourceIfNeeded_() {
+  std::lock_guard<std::mutex> lk(startMutex_);
+  if (audioSourceStarted_ || !audioSource_) {
+    return;
+  }
+  audioSource_->start();
+  audioSourceStarted_ = true;
 }
 
 std::optional<MicBlock> DSPInterface::getMics() {
@@ -175,8 +259,6 @@ void DSPInterface::sendControl(const dsp::Block &control) {
   controlBuf_[controlBufIndex_] = control;
   controlBufIndex_ = (controlBufIndex_ + 1) % systemLatencyBlocks_;
 }
-
-void DSPInterface::step_() {}
 
 void DSPInterface::updateNoiseProfile_() {
   auto &noise = params_.noise;
@@ -216,12 +298,7 @@ void DSPInterface::updateDynamicsS_() {
 
   constexpr float kClip = 1.0f;
   for (int i = 0; i < updatedS.size(); ++i) {
-    if (updatedS(i) > kClip) {
-      updatedS(i) = kClip;
-    }
-    if (updatedS(i) < -kClip) {
-      updatedS(i) = -kClip;
-    }
+    updatedS(i) = std::clamp(updatedS(i), -kClip, kClip);
   }
 
   state.S = updatedS;
@@ -263,13 +340,9 @@ dsp::Block DSPInterface::generateMicNoiseBlock_() {
       static_cast<float>(dsp::BLOCK_SIZE) / static_cast<float>(dsp::SAMPLE_RATE);
   const float phaseStep = blockDurationSeconds / sweepHalfPeriodSeconds;
 
-  float trianglePhase = noiseSweepPhase_;
-  float sweepFraction = 0.0f;
-  if (trianglePhase < 1.0f) {
-    sweepFraction = trianglePhase;
-  } else {
-    sweepFraction = 2.0f - trianglePhase;
-  }
+  const float trianglePhase = noiseSweepPhase_;
+  const float sweepFraction =
+      trianglePhase < 1.0f ? trianglePhase : 2.0f - trianglePhase;
   const float sweptCenterFreqHz =
       centerFreqMinHz + centerFreqSpanHz * sweepFraction;
 
@@ -278,7 +351,8 @@ dsp::Block DSPInterface::generateMicNoiseBlock_() {
   const float brownianStddevHz =
       std::max(0.0f, params_.noise.centerFreqBrownianStddevHz);
   const float brownianExcitationStddevHz =
-      brownianStddevHz * std::sqrt(std::max(0.0f, 1.0f - brownianPole * brownianPole));
+      brownianStddevHz *
+      std::sqrt(std::max(0.0f, 1.0f - brownianPole * brownianPole));
 
   std::normal_distribution<float> brownianDist(0.0f, brownianExcitationStddevHz);
   centerFreqBrownianStateHz_ =
@@ -300,8 +374,7 @@ dsp::Block DSPInterface::generateMicNoiseBlock_() {
 
   noise = noiseBandPassFilter_.filterBlock(noise);
 
-  const float mean = noise.mean();
-  noise.array() -= mean;
+  noise.array() -= noise.mean();
   const float peak = noise.cwiseAbs().maxCoeff();
   if (peak > 1e-12f) {
     noise *= (sampleSigma / peak);
@@ -325,55 +398,69 @@ float DSPInterface::computeStddev_(const dsp::Block &block) const {
 dsp::Block DSPInterface::callProcessMicsWithTimeout_(const MicBlock &micBlock,
                                                      int timeoutUs) {
   dsp::Block result = dsp::Block::Zero();
+  const uint64_t seq = micBlock.seq;
 
-  ProcessMicsFn fn;
   {
-    std::lock_guard<std::mutex> lk(processMutex_);
-    fn = processMics_;
+    std::lock_guard<std::mutex> lk(processState_->processorMutex);
+    if (!processState_->processor) {
+      return result;
+    }
   }
 
-  if (!fn) {
-    return result;
+  {
+    std::lock_guard<std::mutex> lk(processState_->mailboxMutex);
+    if (processState_->resultReady && processState_->resultSeq < seq) {
+      std::cerr << "ProcessMics late completion for seq "
+                << processState_->resultSeq << "; dropping stale output\n";
+      processState_->resultReady = false;
+      processState_->resultException = nullptr;
+    }
+    processState_->pendingMicBlock = micBlock;
+    processState_->pendingSeq = seq;
+    processState_->jobPending = true;
   }
+  processState_->mailboxCv.notify_all();
 
-  auto busy = processMicsBusy_;
-  bool expected = false;
-  if (!busy->compare_exchange_strong(expected, true,
-                                     std::memory_order_acq_rel)) {
-    return result;
-  }
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::microseconds(timeoutUs);
+  std::unique_lock<std::mutex> lk(processState_->mailboxMutex);
+  while (true) {
+    if (processState_->resultReady) {
+      if (processState_->resultSeq == seq) {
+        result = processState_->resultControl;
+        const std::exception_ptr exception = processState_->resultException;
+        processState_->resultReady = false;
+        processState_->resultException = nullptr;
+        lk.unlock();
 
-  std::promise<dsp::Block> promise;
-  auto task = promise.get_future();
-  std::thread(
-      [fn = std::move(fn), micBlock, promise = std::move(promise), busy]() mutable {
-        dsp::Block control = dsp::Block::Zero();
         try {
-          fn(micBlock, control);
-          promise.set_value(control);
-        } catch (...) {
-          try {
-            promise.set_exception(std::current_exception());
-          } catch (...) {
+          if (exception) {
+            std::rethrow_exception(exception);
           }
+        } catch (const std::exception &exceptionObj) {
+          std::cerr << "ProcessMics exception: " << exceptionObj.what() << '\n';
+          return dsp::Block::Zero();
+        } catch (...) {
+          std::cerr << "ProcessMics exception: unknown\n";
+          return dsp::Block::Zero();
         }
-        busy->store(false, std::memory_order_release);
-      })
-      .detach();
 
-  const auto deadline = std::chrono::microseconds(timeoutUs);
-  if (task.wait_for(deadline) == std::future_status::timeout) {
-    std::cerr << "ProcessMics timeout after " << timeoutUs << " us\n";
-    return result;
+        return result;
+      }
+
+      if (processState_->resultSeq < seq) {
+        std::cerr << "ProcessMics late completion for seq "
+                  << processState_->resultSeq << "; dropping stale output\n";
+        processState_->resultReady = false;
+        processState_->resultException = nullptr;
+        continue;
+      }
+    }
+
+    if (processState_->mailboxCv.wait_until(lk, deadline) ==
+        std::cv_status::timeout) {
+      std::cerr << "ProcessMics timeout after " << timeoutUs << " us\n";
+      return result;
+    }
   }
-
-  try {
-    result = task.get();
-  } catch (const std::exception &exception) {
-    std::cerr << "ProcessMics exception: " << exception.what() << '\n';
-  } catch (...) {
-    std::cerr << "ProcessMics exception: unknown\n";
-  }
-
-  return result;
 }

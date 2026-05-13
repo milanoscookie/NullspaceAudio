@@ -3,6 +3,7 @@
 namespace {
 
 using namespace dsp;
+
 struct AncState {
   bool initialized = false;
 };
@@ -16,7 +17,7 @@ void anc::init() {
   gState.initialized = true;
 }
 
-void anc::step(const MicBlock &micBlock, Block &control) {
+void anc::step(const MicBlock &micBlock, dsp::Block &control) {
   if (!gState.initialized) {
     control = Block::Zero();
     return;
@@ -25,6 +26,6 @@ void anc::step(const MicBlock &micBlock, Block &control) {
   // Simple feedforward ANC: use in-ear mic to estimate noise and invert it for
   // control. The control signal is delayed by systemLatencyBlocks * block size
   // samples to account for propagation and block processing latency.
-  // (void)micBlock;
+  (void)micBlock;
   control = Block::Zero();
 }

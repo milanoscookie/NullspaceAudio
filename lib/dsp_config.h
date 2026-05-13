@@ -14,8 +14,8 @@ namespace dsp {
 
 constexpr int SAMPLE_RATE = 48000;
 
-// Block size: 256 samples @ 48kHz = ~10.7ms latency per block
-constexpr int BLOCK_SIZE = 256*4;
+// Block size: 256 samples @ 48kHz = ~5.3ms latency per block
+constexpr int BLOCK_SIZE = 256;
 
 // Impulse response size for convolution (1024 @ 48kHz = ~21ms)
 constexpr int IR_SIZE = 4096;

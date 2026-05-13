@@ -2,11 +2,11 @@
 #include "dsp_interface.h"
 #include "wav_writer.h"
 #include <chrono>
+#include <atomic>
 #include <iostream>
-#include <mutex>
+#include <memory>
 #include <print>
 #include <string>
-#include <vector>
 int main(int argc, char *argv[]) {
   try {
     // Help message
@@ -46,13 +46,25 @@ int main(int argc, char *argv[]) {
     std::string desiredAudioFile = outputPrefix + "_desired_audio.wav";
     std::string outsideFile = outputPrefix + "_outside_mic.wav";
     std::string inearFile = outputPrefix + "_inear_mic.wav";
-    WavWriter wavWriterDesiredAudio(desiredAudioFile);
-    WavWriter wavWriterOutside(outsideFile);
-    WavWriter wavWriterInear(inearFile);
-    std::vector<float> desiredAudioSamples;
-    std::vector<float> outsideSamples;
-    std::vector<float> inearSamples;
-    std::mutex sampleMutex;
+
+    struct CaptureState {
+      std::atomic<int> observedBlocks{0};
+      std::shared_ptr<WavWriter> desiredAudio;
+      std::shared_ptr<WavWriter> outside;
+      std::shared_ptr<WavWriter> inear;
+    };
+
+    auto captureState = std::make_shared<CaptureState>();
+    captureState->desiredAudio =
+        std::make_shared<WavWriter>(desiredAudioFile);
+    captureState->outside = std::make_shared<WavWriter>(outsideFile);
+    captureState->inear = std::make_shared<WavWriter>(inearFile);
+
+    if (!captureState->desiredAudio->open() || !captureState->outside->open() ||
+        !captureState->inear->open()) {
+      std::cerr << "Failed to open WAV files for writing" << std::endl;
+      return 1;
+    }
 
     {
       anc::init();
@@ -60,20 +72,15 @@ int main(int argc, char *argv[]) {
       // Create DSP interface with n block of system latency
       DSPInterface dspInterface(audioConfig, anc::systemLatencyBlocks);
 
-      // Set up the microphone processing function
-      dspInterface.setProcessMics([&](const MicBlock &micBlock,
-                                      dsp::Block &control) {
-        anc::step(micBlock, control);
-
-        std::lock_guard<std::mutex> lk(sampleMutex);
-        desiredAudioSamples.insert(desiredAudioSamples.end(),
-                                   micBlock.desiredAudio.data(),
-                                   micBlock.desiredAudio.data() + dsp::BLOCK_SIZE);
-        outsideSamples.insert(outsideSamples.end(), micBlock.outside.data(),
-                              micBlock.outside.data() + dsp::BLOCK_SIZE);
-        inearSamples.insert(inearSamples.end(), micBlock.inear.data(),
-                            micBlock.inear.data() + dsp::BLOCK_SIZE);
+      dspInterface.setObserveMics([captureState](const MicBlock &micBlock) {
+        captureState->observedBlocks.fetch_add(1, std::memory_order_relaxed);
+        captureState->desiredAudio->writeBlock(micBlock.desiredAudio);
+        captureState->outside->writeBlock(micBlock.outside);
+        captureState->inear->writeBlock(micBlock.inear);
       });
+
+      // Set up the microphone processing function after observers are ready.
+      dspInterface.setProcessMics(anc::step);
 
       // Process microphone data until the WAV file is complete
       int blockCount = 0;
@@ -84,12 +91,15 @@ int main(int argc, char *argv[]) {
 
       // Continue processing while audio source is running or we still have
       // buffered data
-      while (dspInterface.isAudioSourceRunning() || blockCount < 10) {
-        // Get the next block of microphone data
-        auto micBlock = dspInterface.getMics();
-
-        if (micBlock) {
-          blockCount++;
+      int emptyPollsAfterStop = 0;
+      constexpr int kDrainPollLimit = 2000;
+      while (dspInterface.isAudioSourceRunning() ||
+             emptyPollsAfterStop < kDrainPollLimit) {
+        const int newBlockCount =
+            captureState->observedBlocks.load(std::memory_order_relaxed);
+        if (newBlockCount > blockCount) {
+          blockCount = newBlockCount;
+          emptyPollsAfterStop = 0;
 
           // Report progress based on actual elapsed time
           auto now = std::chrono::steady_clock::now();
@@ -113,8 +123,8 @@ int main(int argc, char *argv[]) {
             std::this_thread::sleep_for(std::chrono::microseconds(
                 10)); // Very short sleep to avoid blocking
           } else {
-            // Audio source finished but we might have buffered data
-            break;
+            ++emptyPollsAfterStop;
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
           }
         }
       }
@@ -128,16 +138,6 @@ int main(int argc, char *argv[]) {
                 << blockCount << " in " << totalElapsedMs << "ms"
                 << std::endl;
     }
-
-    if (!wavWriterDesiredAudio.open() || !wavWriterOutside.open() ||
-        !wavWriterInear.open()) {
-      std::cerr << "Failed to open WAV files for writing" << std::endl;
-      return 1;
-    }
-
-    wavWriterDesiredAudio.writeSamples(desiredAudioSamples);
-    wavWriterOutside.writeSamples(outsideSamples);
-    wavWriterInear.writeSamples(inearSamples);
 
   } catch (const std::exception &e) {
     std::cerr << "Error: " << e.what() << std::endl;
