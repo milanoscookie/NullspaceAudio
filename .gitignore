@@ -1,6 +1,7 @@
 build 
 CMakeFiles
 .cache
+.cache/*
 perf.data*
 # Prerequisites
 *.d
