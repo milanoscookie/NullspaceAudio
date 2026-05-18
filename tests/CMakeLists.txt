@@ -1,15 +1,8 @@
 # Tests
 enable_testing()
 
-# All test source files
-set(TEST_SOURCES
-  test_ring_buffer.cpp
-  test_double_buffer_spsc.cpp
-  test_iir_filter.cpp
-  test_lp_butterworth.cpp
-  test_linear_system.cpp
-  test_wav_writer.cpp
-  test_dsp_interface.cpp
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp"
 )
 
 # One executable per test file

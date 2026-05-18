@@ -29,6 +29,8 @@ constexpr int CONTEXT_BLOCKS = IR_SIZE / BLOCK_SIZE; // 4 blocks for 1024-sample
 constexpr int BLOCK_LATENCY_US =
     (BLOCK_SIZE * 1'000'000) / SAMPLE_RATE; // ~5333us
 
+constexpr int SYSTEM_LATENCY_BLOCKS = 1;
+
 using Block = Eigen::Matrix<float, BLOCK_SIZE, 1>;
 using IRBlock = Eigen::Matrix<float, IR_SIZE, 1>;
 using IIRState = Eigen::Matrix<float, IIR_STATE_SIZE, 1>;
@@ -123,7 +125,7 @@ inline constexpr ModelConfig kDefaultModelConfig{
     .secondary = kSecondaryPath,
     .feedback = kFeedbackPath,
     .noise = kNoiseSweep,
-    .secondaryPathDriftGain = 1.0e-7f,
+    .secondaryPathDriftGain = 1.0e-4f,
     .wavToReferenceGain = 0.1f,
     .enableReferenceFeedback = true,
 };

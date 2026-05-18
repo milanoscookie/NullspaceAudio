@@ -80,7 +80,7 @@ TEST(getMics_returns_data) {
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   auto mic = dsp.getMics();
   ASSERT_TRUE(mic.has_value());
-  ASSERT_TRUE(std::isfinite(mic->desiredAudio.sum()));
+  ASSERT_TRUE(std::isfinite(mic->rawInput.sum()));
 }
 
 TEST(sendControl_is_readable) {
@@ -136,12 +136,12 @@ TEST(zero_control_inear_matches_noise_path) {
   // With no noise and no real mic input, signals should be near zero
   // (WAV file input will depend on the source file)
   // Just verify it's finite
-  ASSERT_TRUE(std::isfinite(mic->desiredAudio.sum()));
+  ASSERT_TRUE(std::isfinite(mic->rawInput.sum()));
   ASSERT_TRUE(std::isfinite(mic->outside.sum()));
   ASSERT_TRUE(std::isfinite(mic->inear.sum()));
 }
 
-TEST(mic_block_carries_desired_audio) {
+TEST(mic_block_carries_raw_input) {
   Params p = makeTestParams();
   p.noise.sample_sigma = 0.0f;
   p.noise.wav_to_reference_gain = 0.0f;
@@ -154,8 +154,8 @@ TEST(mic_block_carries_desired_audio) {
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   auto mic = dsp.getMics();
   ASSERT_TRUE(mic.has_value());
-  ASSERT_TRUE(std::isfinite(mic->desiredAudio.sum()));
-  ASSERT_TRUE(mic->desiredAudio.cwiseAbs().maxCoeff() > 0.0f);
+  ASSERT_TRUE(std::isfinite(mic->rawInput.sum()));
+  ASSERT_TRUE(mic->rawInput.cwiseAbs().maxCoeff() > 0.0f);
 }
 
 TEST(mic_block_has_sequence) {
@@ -248,7 +248,7 @@ int main() {
   RUN_TEST(sendControl_is_readable);
   RUN_TEST(processMics_callback_invoked);
   RUN_TEST(zero_control_inear_matches_noise_path);
-  RUN_TEST(mic_block_carries_desired_audio);
+  RUN_TEST(mic_block_carries_raw_input);
   RUN_TEST(mic_block_has_sequence);
   RUN_TEST(blocking_process_mics_falls_back_to_zero_control);
   RUN_TEST(blocking_process_mics_does_not_delay_shutdown);

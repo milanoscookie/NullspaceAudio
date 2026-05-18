@@ -26,7 +26,7 @@ using Clock = std::chrono::steady_clock;
 
 struct alignas(64) MicBlock {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  dsp::Block desiredAudio = dsp::Block::Zero();
+  dsp::Block rawInput = dsp::Block::Zero();
   dsp::Block outside = dsp::Block::Zero();
   dsp::Block inear = dsp::Block::Zero();
   Clock::time_point timestamp = Clock::time_point{};

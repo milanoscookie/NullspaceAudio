@@ -98,8 +98,10 @@ DSPInterface::DSPInterface(const Params &params, int systemLatencyBlocks)
       BandPassBiquadCoeff(centerFreqHz, q, static_cast<float>(dsp::SAMPLE_RATE));
   noiseBandPassFilter_.setCoefficients(noiseBandPassCoeff_.getCoefficients());
 
-  controlBuf_.resize(systemLatencyBlocks_);
-  for (int i = 0; i < systemLatencyBlocks_; ++i) {
+  const size_t controlBufferSize =
+      static_cast<size_t>(std::max(1, systemLatencyBlocks_));
+  controlBuf_.resize(controlBufferSize);
+  for (size_t i = 0; i < controlBufferSize; ++i) {
     controlBuf_[i] = dsp::Block::Zero();
   }
 
@@ -162,7 +164,7 @@ void DSPInterface::audioCallback_(const dsp::Block &input, dsp::Block &output) {
   updateDynamicsS_();
 
   MicBlock mb;
-  mb.desiredAudio = input;
+  mb.rawInput = input;
   mb.timestamp = Clock::now();
   mb.seq = mic_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
   {
@@ -221,7 +223,7 @@ void DSPInterface::dspThreadLoop_(std::stop_token st) {
     {
       std::lock_guard<std::mutex> lk(controlBufMutex_);
       controlBuf_[controlBufIndex_] = control;
-      controlBufIndex_ = (controlBufIndex_ + 1) % systemLatencyBlocks_;
+      controlBufIndex_ = (controlBufIndex_ + 1) % controlBuf_.size();
     }
   }
 }
@@ -257,7 +259,7 @@ std::optional<MicBlock> DSPInterface::getMics() {
 void DSPInterface::sendControl(const dsp::Block &control) {
   std::lock_guard<std::mutex> lk(controlBufMutex_);
   controlBuf_[controlBufIndex_] = control;
-  controlBufIndex_ = (controlBufIndex_ + 1) % systemLatencyBlocks_;
+  controlBufIndex_ = (controlBufIndex_ + 1) % controlBuf_.size();
 }
 
 void DSPInterface::updateNoiseProfile_() {

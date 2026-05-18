@@ -20,7 +20,7 @@ int main(int argc, char *argv[]) {
           << "  output_prefix  : Prefix for output files (default: output)"
           << std::endl;
       std::cout
-          << "Output files: <prefix>_desired_audio.wav, <prefix>_outside_mic.wav, <prefix>_inear_mic.wav"
+          << "Output files: <prefix>_raw_input.wav, <prefix>_outside_mic.wav, <prefix>_inear_mic.wav"
           << std::endl;
       return 0;
     }
@@ -43,24 +43,23 @@ int main(int argc, char *argv[]) {
     audioConfig.inputWavPath = inputWavFile;
 
     // Create WAV writers for the raw WAV reference and simulated microphones
-    std::string desiredAudioFile = outputPrefix + "_desired_audio.wav";
+    std::string rawInputFile = outputPrefix + "_raw_input.wav";
     std::string outsideFile = outputPrefix + "_outside_mic.wav";
     std::string inearFile = outputPrefix + "_inear_mic.wav";
 
     struct CaptureState {
       std::atomic<int> observedBlocks{0};
-      std::shared_ptr<WavWriter> desiredAudio;
+      std::shared_ptr<WavWriter> rawInput;
       std::shared_ptr<WavWriter> outside;
       std::shared_ptr<WavWriter> inear;
     };
 
     auto captureState = std::make_shared<CaptureState>();
-    captureState->desiredAudio =
-        std::make_shared<WavWriter>(desiredAudioFile);
+    captureState->rawInput = std::make_shared<WavWriter>(rawInputFile);
     captureState->outside = std::make_shared<WavWriter>(outsideFile);
     captureState->inear = std::make_shared<WavWriter>(inearFile);
 
-    if (!captureState->desiredAudio->open() || !captureState->outside->open() ||
+    if (!captureState->rawInput->open() || !captureState->outside->open() ||
         !captureState->inear->open()) {
       std::cerr << "Failed to open WAV files for writing" << std::endl;
       return 1;
@@ -69,12 +68,12 @@ int main(int argc, char *argv[]) {
     {
       anc::init();
 
-      // Create DSP interface with n block of system latency
-      DSPInterface dspInterface(audioConfig, anc::systemLatencyBlocks);
+      // Create DSP interface with configured simulator latency
+      DSPInterface dspInterface(audioConfig, dsp::SYSTEM_LATENCY_BLOCKS);
 
       dspInterface.setObserveMics([captureState](const MicBlock &micBlock) {
         captureState->observedBlocks.fetch_add(1, std::memory_order_relaxed);
-        captureState->desiredAudio->writeBlock(micBlock.desiredAudio);
+        captureState->rawInput->writeBlock(micBlock.rawInput);
         captureState->outside->writeBlock(micBlock.outside);
         captureState->inear->writeBlock(micBlock.inear);
       });

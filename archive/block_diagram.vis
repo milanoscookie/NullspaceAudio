@@ -1,0 +1,203 @@
+digraph ANC_Vertical_Block_Diagram {
+    rankdir=TB;
+    bgcolor="white";
+
+    graph [
+        fontname="Helvetica",
+        fontsize=18,
+        labelloc="t",
+        label="Active Noise Cancellation: Acoustic Paths and Latencies",
+        pad=0.45,
+        nodesep=0.55,
+        ranksep=0.75,
+        splines=ortho
+    ];
+
+    node [
+        fontname="Helvetica",
+        fontsize=12,
+        shape=box,
+        style="rounded,filled",
+        color="#444444",
+        penwidth=1.3,
+        margin="0.14,0.09"
+    ];
+
+    edge [
+        fontname="Helvetica",
+        fontsize=11,
+        color="#333333",
+        penwidth=1.4,
+        arrowsize=0.8
+    ];
+
+    // =========================
+    // Source
+    // =========================
+    noise [
+        shape=oval,
+        fillcolor="#DCEBFF",
+        label="Engine Noise\nrawInput / disturbance"
+    ];
+
+    // =========================
+    // Noise acoustic paths
+    // =========================
+    H [
+        fillcolor="#F3F8FF",
+        label="H(z)\nReference Path\nnoise → outside mic\nlatency: unknown"
+    ];
+
+    P [
+        fillcolor="#F3F8FF",
+        label="P(z)\nPrimary Path\nnoise → in-ear mic\nlatency: unknown"
+    ];
+
+    outside_sum [
+        shape=circle,
+        width=0.36,
+        fixedsize=true,
+        fillcolor="#FFFFFF",
+        label="+"
+    ];
+
+    inear_sum [
+        shape=circle,
+        width=0.36,
+        fixedsize=true,
+        fillcolor="#FFFFFF",
+        label="+"
+    ];
+
+    outside_mic [
+        fillcolor="#E7F8E7",
+        label="Outside Mic\nmicBlock.outside\nreference signal"
+    ];
+
+    inear_mic [
+        fillcolor="#FFE3E3",
+        label="In-Ear Mic\nmicBlock.inear\nresidual error"
+    ];
+
+    // =========================
+    // Controller
+    // =========================
+    controller [
+        fillcolor="#EEE7FF",
+        label="ANC Controller\nanc::step(micBlock, control)\nuses outside + in-ear mics\ncompute deadline: ≤ 5.33 ms"
+    ];
+
+    control [
+        fillcolor="#EEE7FF",
+        label="control[k]\nanti-noise block\n256 samples"
+    ];
+
+    block_delay [
+        fillcolor="#FFE7C2",
+        label="Mandatory Transport Delay\n1 block = 5.33 ms\ncontrol[k] plays at k+1"
+    ];
+
+    // =========================
+    // Speaker and control paths
+    // =========================
+    speaker [
+        fillcolor="#FFF4D8",
+        label="Speaker\nactuator response\nlatency: unknown"
+    ];
+
+    S [
+        fillcolor="#FFF4D8",
+        label="S(z)\nSecondary Path\nspeaker → in-ear mic\nlatency: unknown"
+    ];
+
+    C [
+        fillcolor="#FFF4D8",
+        label="C(z)\nLeakage Path\nspeaker → outside mic\nlatency: unknown"
+    ];
+
+    // =========================
+    // Notes
+    // =========================
+    timing_note [
+        shape=note,
+        fillcolor="#FFF9D9",
+        label="Known timing:\nSample rate = 48 kHz\nBlock size = 256 samples\nBlock time = 5.33 ms"
+    ];
+
+    latency_note [
+        shape=note,
+        fillcolor="#FFF9D9",
+        label="Anti-noise arrival time:\nalgorithm delay\n+ 5.33 ms transport delay\n+ speaker delay\n+ secondary-path delay\n\nOnly the 5.33 ms transport delay is known."
+    ];
+
+    warning_note [
+        shape=note,
+        fillcolor="#FFF0F0",
+        label="Leakage warning:\nC(z) sends speaker output back\ninto the outside reference mic.\nThis can corrupt adaptation."
+    ];
+
+    // =========================
+    // Main vertical flow
+    // =========================
+    noise -> H;
+    noise -> P;
+
+    H -> outside_sum;
+    P -> inear_sum;
+
+    outside_sum -> outside_mic;
+    inear_sum -> inear_mic;
+
+    outside_mic -> controller [
+        label="reference"
+    ];
+
+    inear_mic -> controller [
+        label="error"
+    ];
+
+    controller -> control;
+    control -> block_delay;
+    block_delay -> speaker;
+
+    speaker -> S;
+    speaker -> C;
+
+    S -> inear_sum [
+        label="anti-noise"
+    ];
+
+    C -> outside_sum [
+        label="leakage"
+    ];
+
+    // =========================
+    // Notes
+    // =========================
+    timing_note -> block_delay [
+        style=dashed,
+        arrowhead=none,
+        color="#999999"
+    ];
+
+    latency_note -> S [
+        style=dashed,
+        arrowhead=none,
+        color="#999999"
+    ];
+
+    warning_note -> C [
+        style=dashed,
+        arrowhead=none,
+        color="#999999"
+    ];
+
+    // =========================
+    // Layout hints
+    // =========================
+    { rank=same; H; P; }
+    { rank=same; outside_sum; inear_sum; }
+    { rank=same; outside_mic; inear_mic; }
+    { rank=same; S; C; }
+    { rank=same; timing_note; latency_note; warning_note; }
+}
