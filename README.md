@@ -4,9 +4,9 @@ Welcome to the Nullspace Active Noise Cancellation project.
 
 In this project, you will implement a real-time ANC controller for simulated airplane engine noise. The full technical explanation, acoustic plant model, timing constraints, grading rubric, and implementation requirements are provided in:
 
-```text
-docs/problem_statement.pdf
-```
+
+[[docs/problem_statement.pdf]]
+
 
 Read that PDF before writing your controller. This README is only meant to help you get the repository set up and run the simulator.
 
