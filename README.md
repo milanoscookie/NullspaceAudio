@@ -107,6 +107,12 @@ Your main controller implementation goes in:
 src/anc.cpp
 ```
 
+and its corrosponding headerfile:
+
+```text
+include/anc.h
+```
+
 The simulator calls your controller through:
 
 ```cpp
