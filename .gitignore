@@ -2,6 +2,7 @@ build
 CMakeFiles
 .cache
 .cache/*
+ANC/_deps/eigen-*
 perf.data*
 # Prerequisites
 *.d
