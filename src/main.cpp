@@ -5,33 +5,30 @@
 #include <atomic>
 #include <iostream>
 #include <memory>
-#include <print>
 #include <string>
 int main(int argc, char *argv[]) {
   try {
     // Help message
     if (argc > 1 &&
         (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
-      std::cout << "Usage: " << argv[0] << " [input.wav] [output_prefix]"
-                << std::endl;
-      std::cout << "  input.wav      : Input WAV file (default: input.wav)"
-                << std::endl;
-      std::cout
-          << "  output_prefix  : Prefix for output files (default: output)"
-          << std::endl;
-      std::cout
-          << "Output files: <prefix>_raw_input.wav, <prefix>_outside_mic.wav, <prefix>_inear_mic.wav"
-          << std::endl;
+      std::cout << "Usage: " << argv[0] << " <input.wav> [output_prefix]\n"
+                << "  input.wav      : Input WAV file\n"
+                << "  output_prefix  : Prefix for output files (default: output)\n"
+                << "Output files: <prefix>_raw_input.wav, <prefix>_outside_mic.wav, <prefix>_inear_mic.wav\n";
       return 0;
     }
 
+    if (argc < 2) {
+      std::cerr << "Error: missing input WAV file\n";
+      std::cerr << "Usage: " << argv[0] << " <input.wav> [output_prefix]"
+                << std::endl;
+      return 1;
+    }
+
     // Parse command-line arguments
-    std::string inputWavFile = "input.wav"; // Default input file
+    std::string inputWavFile = argv[1];
     std::string outputPrefix = "output";    // Default output prefix
 
-    if (argc > 1) {
-      inputWavFile = argv[1];
-    }
     if (argc > 2) {
       outputPrefix = argv[2];
     }
