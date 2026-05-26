@@ -1,8 +1,8 @@
 #include "anc.h"
 #include "dsp_interface.h"
 #include "wav_writer.h"
-#include <chrono>
 #include <atomic>
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -11,10 +11,12 @@ int main(int argc, char *argv[]) {
     // Help message
     if (argc > 1 &&
         (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
-      std::cout << "Usage: " << argv[0] << " <input.wav> [output_prefix]\n"
-                << "  input.wav      : Input WAV file\n"
-                << "  output_prefix  : Prefix for output files (default: output)\n"
-                << "Output files: <prefix>_raw_input.wav, <prefix>_outside_mic.wav, <prefix>_inear_mic.wav\n";
+      std::cout
+          << "Usage: " << argv[0] << " <input.wav> [output_prefix]\n"
+          << "  input.wav      : Input WAV file\n"
+          << "  output_prefix  : Prefix for output files (default: output)\n"
+          << "Output files: <prefix>_raw_input.wav, <prefix>_outside_mic.wav, "
+             "<prefix>_inear_mic.wav\n";
       return 0;
     }
 
@@ -27,7 +29,7 @@ int main(int argc, char *argv[]) {
 
     // Parse command-line arguments
     std::string inputWavFile = argv[1];
-    std::string outputPrefix = "output";    // Default output prefix
+    std::string outputPrefix = "output"; // Default output prefix
 
     if (argc > 2) {
       outputPrefix = argv[2];
@@ -107,7 +109,8 @@ int main(int argc, char *argv[]) {
           // Report every ~1000ms of actual elapsed time
           if (elapsedMs >= 1000) {
             auto totalElapsedSecs =
-                std::chrono::duration_cast<std::chrono::seconds>(now - startTime)
+                std::chrono::duration_cast<std::chrono::seconds>(now -
+                                                                 startTime)
                     .count();
             std::cout << "Processed " << totalElapsedSecs << " second(s) - "
                       << blockCount << " blocks" << std::endl;
@@ -131,8 +134,7 @@ int main(int argc, char *argv[]) {
                                                                 startTime)
               .count();
       std::cout << "Audio processing complete. Total blocks processed: "
-                << blockCount << " in " << totalElapsedMs << "ms"
-                << std::endl;
+                << blockCount << " in " << totalElapsedMs << "ms" << std::endl;
     }
 
   } catch (const std::exception &e) {
