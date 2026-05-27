@@ -71,8 +71,11 @@ brew install cmake fftw
 From the repository root:
 
 ```bash
-cmake -S . -B build
-cmake --build build --target DSPApp
+
+mkdir build
+cd build
+cmake ..
+make
 ```
 
 If the build succeeds, you are ready to run the simulator.
