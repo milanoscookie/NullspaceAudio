@@ -55,11 +55,11 @@ struct NoiseSweepConfig {
   float centerFreqMinHz = 300.0f;
   float centerFreqMaxHz = 700.0f;
   float sweepHalfPeriodSeconds = 0.5f;
-  float bandwidthHz = 30.0f;
-  float centerFreqBrownianStddevHz = 3.0f;
+  float bandwidthHz = 10.0f;
+  float centerFreqBrownianStddevHz = 0.0f;
   float centerFreqBrownianPole = 0.99f;
-  float sampleSigma = 0.01f;
-  float noiseGain = 4.0f;
+  float sampleSigma = 0.02f;
+  float noiseGain = 5.0f;
 };
 
 struct ModelConfig {
@@ -92,28 +92,28 @@ inline constexpr ResonanceConfig kSecondaryResonance{
 inline constexpr PathConfig kReferencePath{
     .delaySamples = 2,
     .gain = 1.0f,
-    .lowpassHz = 8000.0f,
+    .lowpassHz = 0.0f,
     .resonance = kNoResonance,
 };
 
 inline constexpr PathConfig kPrimaryPath{
     .delaySamples = 32,
     .gain = 0.7f,
-    .lowpassHz = 1500.0f,
-    .resonance = kPrimaryResonance,
+    .lowpassHz = 0.0f,
+    .resonance = kNoResonance,
 };
 
 inline constexpr PathConfig kSecondaryPath{
-    .delaySamples = 16,
+    .delaySamples = 0,
     .gain = 1.0f,
-    .lowpassHz = 4000.0f,
-    .resonance = kSecondaryResonance,
+    .lowpassHz = 0.0f,
+    .resonance = kNoResonance,
 };
 
 inline constexpr PathConfig kFeedbackPath{
     .delaySamples = 8,
-    .gain = 0.10f,
-    .lowpassHz = 3000.0f,
+    .gain = 0.0f,
+    .lowpassHz = 0.0f,
     .resonance = kNoResonance,
 };
 
@@ -127,7 +127,7 @@ inline constexpr ModelConfig kDefaultModelConfig{
     .noise = kNoiseSweep,
     .secondaryPathDriftGain = 1.0e-4f,
     .wavToReferenceGain = 0.1f,
-    .enableReferenceFeedback = true,
+    .enableReferenceFeedback = false,
 };
 
 constexpr float kTwoPi = 2.0f * std::numbers::pi_v<float>;

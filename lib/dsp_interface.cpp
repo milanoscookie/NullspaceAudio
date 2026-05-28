@@ -338,9 +338,8 @@ dsp::Block DSPInterface::generateMicNoiseBlock_() {
   const float centerFreqSpanHz = std::max(0.0f, centerFreqMaxHz - centerFreqMinHz);
   const float sweepHalfPeriodSeconds =
       std::max(1e-6f, params_.noise.sweepHalfPeriodSeconds);
-  const float blockDurationSeconds =
-      static_cast<float>(dsp::BLOCK_SIZE) / static_cast<float>(dsp::SAMPLE_RATE);
-  const float phaseStep = blockDurationSeconds / sweepHalfPeriodSeconds;
+  const float sweepPhaseStep =
+      1.0f / (sweepHalfPeriodSeconds * static_cast<float>(dsp::SAMPLE_RATE));
 
   const float trianglePhase = noiseSweepPhase_;
   const float sweepFraction =
@@ -360,33 +359,35 @@ dsp::Block DSPInterface::generateMicNoiseBlock_() {
   centerFreqBrownianStateHz_ =
       brownianPole * centerFreqBrownianStateHz_ + brownianDist(noiseRng_);
 
-  const float noisyCenterFreqHz = std::clamp(
-      sweptCenterFreqHz + centerFreqBrownianStateHz_, centerFreqMinHz,
-      centerFreqMaxHz);
   const float safeBandwidthHz = std::max(1e-3f, params_.noise.bandwidthHz);
-  const float q = std::max(1e-3f, noisyCenterFreqHz / safeBandwidthHz);
-  noiseBandPassCoeff_.setCenterFreqHz(noisyCenterFreqHz);
+  const float q = std::max(1e-3f, sweptCenterFreqHz / safeBandwidthHz);
+  noiseBandPassCoeff_.setCenterFreqHz(sweptCenterFreqHz);
   noiseBandPassCoeff_.setQ(q);
   noiseBandPassFilter_.setCoefficients(noiseBandPassCoeff_.getCoefficients());
 
-  std::normal_distribution<float> noiseDist(0.0f, sampleSigma);
+  // Deterministic phase-continuous sine sweep. Frequency is advanced per sample
+  // so the tone is smooth instead of stair-stepped at block boundaries.
+  const float amplitude = sampleSigma * noiseGain;
   for (int i = 0; i < dsp::BLOCK_SIZE; ++i) {
-    noise(i) = noiseDist(noiseRng_);
+    const float sampleSweepFraction =
+        noiseSweepPhase_ < 1.0f ? noiseSweepPhase_ : 2.0f - noiseSweepPhase_;
+    const float sampleCenterFreqHz =
+        centerFreqMinHz + centerFreqSpanHz * sampleSweepFraction;
+
+    noise(i) = amplitude * std::sin(noiseTonePhase_);
+    noiseTonePhase_ += dsp::sim::kTwoPi * sampleCenterFreqHz /
+                       static_cast<float>(dsp::SAMPLE_RATE);
+    if (noiseTonePhase_ >= dsp::sim::kTwoPi) {
+      noiseTonePhase_ -= dsp::sim::kTwoPi;
+    }
+
+    noiseSweepPhase_ += sweepPhaseStep;
+    if (noiseSweepPhase_ >= 2.0f) {
+      noiseSweepPhase_ -= 2.0f;
+    }
   }
 
   noise = noiseBandPassFilter_.filterBlock(noise);
-
-  noise.array() -= noise.mean();
-  const float peak = noise.cwiseAbs().maxCoeff();
-  if (peak > 1e-12f) {
-    noise *= (sampleSigma / peak);
-  }
-  noise *= noiseGain;
-
-  noiseSweepPhase_ += phaseStep;
-  if (noiseSweepPhase_ >= 2.0f) {
-    noiseSweepPhase_ -= 2.0f;
-  }
 
   return noise;
 }

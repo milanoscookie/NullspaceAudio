@@ -200,6 +200,7 @@ private:
   IIRFilter noiseBandPassFilter_ = IIRFilter(IIRFilter::identityCoeffs());
   BandPassBiquadCoeff noiseBandPassCoeff_;
   float noiseSweepPhase_ = 0.0f;
+  float noiseTonePhase_ = 0.0f;
   float centerFreqBrownianStateHz_ = 0.0f;
 
   std::mt19937 noiseRng_{std::random_device{}()};
