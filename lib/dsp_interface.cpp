@@ -90,13 +90,11 @@ DSPInterface::DSPInterface(const Params &params, int systemLatencyBlocks)
   speakerSystem_.setImpulseResponse(params_.paths.speaker);
   S_system_.setImpulseResponse(params_.state.S);
 
-  const float centerFreqHz =
-      0.5f * (params_.noise.centerFreqMinHz + params_.noise.centerFreqMaxHz);
   const float safeBandwidthHz = std::max(1e-3f, params_.noise.bandwidthHz);
-  const float q = std::max(1e-3f, centerFreqHz / safeBandwidthHz);
-  noiseBandPassCoeff_ =
-      BandPassBiquadCoeff(centerFreqHz, q, static_cast<float>(dsp::SAMPLE_RATE));
-  noiseBandPassFilter_.setCoefficients(noiseBandPassCoeff_.getCoefficients());
+  noiseLpCoeff_ =
+      LPButterworthCoeff(safeBandwidthHz, static_cast<float>(dsp::SAMPLE_RATE));
+  noiseLpFilterI_.setCoefficients(noiseLpCoeff_.getCoefficients());
+  noiseLpFilterQ_.setCoefficients(noiseLpCoeff_.getCoefficients());
 
   const size_t controlBufferSize =
       static_cast<size_t>(std::max(1, systemLatencyBlocks_));
@@ -341,40 +339,26 @@ dsp::Block DSPInterface::generateMicNoiseBlock_() {
   const float sweepPhaseStep =
       1.0f / (sweepHalfPeriodSeconds * static_cast<float>(dsp::SAMPLE_RATE));
 
-  const float trianglePhase = noiseSweepPhase_;
-  const float sweepFraction =
-      trianglePhase < 1.0f ? trianglePhase : 2.0f - trianglePhase;
-  const float sweptCenterFreqHz =
-      centerFreqMinHz + centerFreqSpanHz * sweepFraction;
-
-  const float brownianPole =
-      std::clamp(params_.noise.centerFreqBrownianPole, 0.0f, 0.99999f);
-  const float brownianStddevHz =
-      std::max(0.0f, params_.noise.centerFreqBrownianStddevHz);
-  const float brownianExcitationStddevHz =
-      brownianStddevHz *
-      std::sqrt(std::max(0.0f, 1.0f - brownianPole * brownianPole));
-
-  std::normal_distribution<float> brownianDist(0.0f, brownianExcitationStddevHz);
-  centerFreqBrownianStateHz_ =
-      brownianPole * centerFreqBrownianStateHz_ + brownianDist(noiseRng_);
-
-  const float safeBandwidthHz = std::max(1e-3f, params_.noise.bandwidthHz);
-  const float q = std::max(1e-3f, sweptCenterFreqHz / safeBandwidthHz);
-  noiseBandPassCoeff_.setCenterFreqHz(sweptCenterFreqHz);
-  noiseBandPassCoeff_.setQ(q);
-  noiseBandPassFilter_.setCoefficients(noiseBandPassCoeff_.getCoefficients());
-
-  // Deterministic phase-continuous sine sweep. Frequency is advanced per sample
-  // so the tone is smooth instead of stair-stepped at block boundaries.
   const float amplitude = sampleSigma * noiseGain;
+  std::normal_distribution<float> dist(0.0f, amplitude);
+
   for (int i = 0; i < dsp::BLOCK_SIZE; ++i) {
     const float sampleSweepFraction =
         noiseSweepPhase_ < 1.0f ? noiseSweepPhase_ : 2.0f - noiseSweepPhase_;
     const float sampleCenterFreqHz =
         centerFreqMinHz + centerFreqSpanHz * sampleSweepFraction;
 
-    noise(i) = amplitude * std::sin(noiseTonePhase_);
+    const float noiseI = dist(noiseRng_);
+    const float noiseQ = dist(noiseRng_);
+
+    const float envI = noiseLpFilterI_.filterSample(noiseI);
+    const float envQ = noiseLpFilterQ_.filterSample(noiseQ);
+
+    const float carrierI = std::cos(noiseTonePhase_);
+    const float carrierQ = std::sin(noiseTonePhase_);
+
+    noise(i) = envI * carrierI - envQ * carrierQ;
+
     noiseTonePhase_ += dsp::sim::kTwoPi * sampleCenterFreqHz /
                        static_cast<float>(dsp::SAMPLE_RATE);
     if (noiseTonePhase_ >= dsp::sim::kTwoPi) {
@@ -386,8 +370,6 @@ dsp::Block DSPInterface::generateMicNoiseBlock_() {
       noiseSweepPhase_ -= 2.0f;
     }
   }
-
-  noise = noiseBandPassFilter_.filterBlock(noise);
 
   return noise;
 }

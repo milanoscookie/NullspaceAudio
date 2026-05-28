@@ -2,7 +2,7 @@
 
 #include "audio_source.h"
 #include "dsp_config.h"
-#include "utils/BandPassBiquadCoeff.h"
+#include "utils/LPButterworthCoeff.h"
 #include "utils/DoubleBufferSPSC.h"
 #include "utils/FastLinearSystem.h"
 #include "utils/IIRFilter.h"
@@ -197,11 +197,11 @@ private:
   dsp::Block lastOutside_ = dsp::Block::Zero();
   dsp::Block lastInear_ = dsp::Block::Zero();
 
-  IIRFilter noiseBandPassFilter_ = IIRFilter(IIRFilter::identityCoeffs());
-  BandPassBiquadCoeff noiseBandPassCoeff_;
+  LPButterworthCoeff noiseLpCoeff_;
+  IIRFilter noiseLpFilterI_ = IIRFilter(IIRFilter::identityCoeffs());
+  IIRFilter noiseLpFilterQ_ = IIRFilter(IIRFilter::identityCoeffs());
   float noiseSweepPhase_ = 0.0f;
   float noiseTonePhase_ = 0.0f;
-  float centerFreqBrownianStateHz_ = 0.0f;
 
   std::mt19937 noiseRng_{std::random_device{}()};
 };
